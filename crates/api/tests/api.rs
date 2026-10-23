@@ -55,6 +55,22 @@ async fn health() {
 }
 
 #[tokio::test]
+async fn unknown_paths_are_not_found() {
+    let req = Request::get("/v1/nope").body(Body::empty()).unwrap();
+    let res = offline_app().oneshot(req).await.unwrap();
+    assert_eq!(res.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn version() {
+    let req = Request::get("/v1/version").body(Body::empty()).unwrap();
+    let res = offline_app().oneshot(req).await.unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let body = to_bytes(res.into_body(), usize::MAX).await.unwrap();
+    assert_eq!(String::from_utf8_lossy(&body), mulsanne_server::version());
+}
+
+#[tokio::test]
 async fn rejects_unsigned_stale_and_tampered_requests() {
     let app = offline_app();
     let key = SigningKey::from_bytes(&[1; 32]);

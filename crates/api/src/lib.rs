@@ -60,6 +60,13 @@ impl AppState {
     }
 }
 
+/// The deployed release, e.g. `0.2.0` in production or `testing-1a2b3c4` on
+/// testing; set by the deploy workflow in `MULSANNE_VERSION`. App releases
+/// check production's before shipping (`GET /v1/version`).
+pub fn version() -> String {
+    std::env::var("MULSANNE_VERSION").unwrap_or_else(|_| "dev".into())
+}
+
 /// Driving produces well under 60 laps an hour; the rest is headroom for
 /// uploading past personal bests and sessions in bulk.
 pub const LAP_UPLOADS_PER_HOUR: usize = 300;
@@ -70,7 +77,8 @@ pub fn app(state: AppState) -> Router {
         .route("/v1/me", get(users::me).patch(users::update_me).delete(users::delete_me))
         .route("/v1/laps", post(laps::upload))
         .route("/v1/laps/{id}", delete(laps::delete))
-        .layer(middleware::from_fn(auth::verify_signature));
+        // route_layer: only matched routes need a signature, so unknown paths get a 404.
+        .route_layer(middleware::from_fn(auth::verify_signature));
 
     // Downloading a trace is public; uploading one is signed and may be larger.
     let trace = get(traces::get).merge(
@@ -82,6 +90,7 @@ pub fn app(state: AppState) -> Router {
     Router::new()
         .route("/healthz", get(|| async { "ok" }))
         .route("/v1/ip", get(auth::show_ip))
+        .route("/v1/version", get(|| async { version() }))
         .route("/v1/leaderboards", get(laps::leaderboard))
         .route("/v1/leaderboards/boards", get(laps::boards))
         .route("/v1/laps/{id}/trace", trace)

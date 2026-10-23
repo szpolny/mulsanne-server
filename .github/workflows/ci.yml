@@ -1,20 +1,15 @@
 name: CI
 
 # Every push and pull request runs clippy and all tests, including the
-# database tests, against a throwaway Postgres. Pushes to master then deploy
-# testing. Production normally deploys with each app release (from the app
-# repo's release workflow); running this by hand with the box ticked is for
-# server-only hotfixes.
+# database tests, against a throwaway Postgres. On master:
+# - every push that passes deploys testing;
+# - release-please keeps a release PR open, and merging it tags a release and
+#   deploys that version to production. This is the only way production
+#   changes. Apps check production's version before they ship.
 on:
   push:
     branches: [master]
   pull_request:
-  workflow_dispatch:
-    inputs:
-      deploy_production:
-        description: Deploy this commit to production after the tests pass
-        type: boolean
-        default: false
 
 jobs:
   test:
@@ -47,9 +42,25 @@ jobs:
 
       - run: cargo test -- --include-ignored
 
+  release-please:
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    outputs:
+      release_created: ${{ steps.release.outputs.release_created }}
+      version: ${{ steps.release.outputs.version }}
+    steps:
+      - uses: googleapis/release-please-action@v4
+        id: release
+        with:
+          config-file: release-please-config.json
+          manifest-file: .release-please-manifest.json
+
   deploy-testing:
     needs: test
-    if: github.event_name == 'push' && github.ref == 'refs/heads/master'
+    if: github.event_name == 'push'
     runs-on: ubuntu-latest
     # One deploy at a time; a newer push waits for the running one.
     concurrency: deploy-testing
@@ -58,13 +69,13 @@ jobs:
 
       - uses: superfly/flyctl-actions/setup-flyctl@master
 
-      - run: flyctl deploy -c fly.test.toml --remote-only
+      - run: flyctl deploy -c fly.test.toml --remote-only --env "MULSANNE_VERSION=testing-${GITHUB_SHA::7}"
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN_TESTING }}
 
   deploy-production:
-    needs: test
-    if: github.event_name == 'workflow_dispatch' && inputs.deploy_production && github.ref == 'refs/heads/master'
+    needs: [test, release-please]
+    if: needs.release-please.outputs.release_created
     runs-on: ubuntu-latest
     concurrency: deploy-production
     steps:
@@ -72,6 +83,6 @@ jobs:
 
       - uses: superfly/flyctl-actions/setup-flyctl@master
 
-      - run: flyctl deploy -c fly.toml --remote-only
+      - run: flyctl deploy -c fly.toml --remote-only --env "MULSANNE_VERSION=${{ needs.release-please.outputs.version }}"
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN_PRODUCTION }}

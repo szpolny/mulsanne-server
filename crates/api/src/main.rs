@@ -46,7 +46,7 @@ async fn serve(db: PgPool) -> Result<()> {
     let state = mulsanne_server::AppState::new(db).with_traces(traces).with_proxy_hops(proxy_hops);
     let app = mulsanne_server::app(state);
     let listener = tokio::net::TcpListener::bind(bind).await?;
-    tracing::info!("listening on {bind}");
+    tracing::info!("mulsanne-server {} listening on {bind}", mulsanne_server::version());
     axum::serve(listener, app.into_make_service_with_connect_info::<SocketAddr>())
         .with_graceful_shutdown(async {
             let _ = tokio::signal::ctrl_c().await;
