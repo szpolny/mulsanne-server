@@ -41,6 +41,110 @@ pub struct ApiError {
     pub message: String,
 }
 
+/// Session types as the app labels them.
+pub const SESSION_TYPES: &[&str] = &["Test Day", "Practice", "Qualifying", "Warmup", "Race"];
+
+/// `POST /v1/laps`: one clean flying lap. Times in seconds, distances in
+/// metres, speeds in m/s.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LapUpload {
+    pub track: String,
+    pub track_length: f64,
+    pub car: String,
+    pub vehicle_name: String,
+    pub car_class: String,
+    pub session_type: String,
+    /// LMU's build number, when the app knows it.
+    #[serde(default)]
+    pub game_version: Option<i32>,
+    pub lap_time: f64,
+    pub s1: f64,
+    pub s2: f64,
+    pub s3: f64,
+    #[serde(default)]
+    pub fuel_used: Option<f64>,
+    #[serde(default)]
+    pub ve_used: Option<f64>,
+    pub max_speed: f64,
+    /// Unix seconds.
+    pub recorded_at: i64,
+    pub app_version: String,
+    /// Hide the driver's name on leaderboards for this lap.
+    #[serde(default)]
+    pub anonymous: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LapStatus {
+    /// On the leaderboards.
+    Ranked,
+    /// Hidden until reviewed: much faster than the record, or its track
+    /// length doesn't match other drivers'.
+    Held,
+}
+
+/// Response to `POST /v1/laps`. Uploading the same lap again returns the
+/// original.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LapUploaded {
+    pub id: String,
+    pub status: LapStatus,
+}
+
+/// `GET /v1/leaderboards`: best ranked lap per driver.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct LeaderboardQuery {
+    pub track: String,
+    pub car_class: String,
+    #[serde(default)]
+    pub car: Option<String>,
+    #[serde(default)]
+    pub session_type: Option<String>,
+    #[serde(default)]
+    pub game_version: Option<i32>,
+    #[serde(default)]
+    pub limit: Option<i64>,
+    #[serde(default)]
+    pub offset: Option<i64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LeaderboardEntry {
+    pub rank: i64,
+    pub lap_id: String,
+    /// `None` for anonymous laps.
+    pub driver: Option<String>,
+    pub car: String,
+    pub vehicle_name: String,
+    pub session_type: String,
+    pub game_version: Option<i32>,
+    pub lap_time: f64,
+    pub s1: f64,
+    pub s2: f64,
+    pub s3: f64,
+    /// Unix seconds.
+    pub recorded_at: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Leaderboard {
+    pub entries: Vec<LeaderboardEntry>,
+    /// Drivers on the board, for paging.
+    pub total: i64,
+}
+
+/// `GET /v1/leaderboards/boards`: every track and class with ranked laps.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BoardSummary {
+    pub track: String,
+    pub car_class: String,
+    pub drivers: i64,
+    pub best_lap: f64,
+    /// Game versions with ranked laps on this board, newest first.
+    pub game_versions: Vec<i32>,
+}
+
 pub const DISPLAY_NAME_MIN: usize = 2;
 pub const DISPLAY_NAME_MAX: usize = 32;
 

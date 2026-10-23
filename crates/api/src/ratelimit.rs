@@ -1,33 +1,33 @@
 use std::collections::HashMap;
-use std::net::IpAddr;
+use std::hash::Hash;
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
-/// In-memory sliding-window limiter keyed by IP. Per process, so limits
+/// In-memory sliding-window limiter, keyed by IP or user. Per process, so limits
 /// reset on restart and aren't shared between instances.
-pub struct Limiter {
+pub struct Limiter<K> {
     max: usize,
     window: Duration,
-    hits: Mutex<HashMap<IpAddr, Vec<Instant>>>,
+    hits: Mutex<HashMap<K, Vec<Instant>>>,
 }
 
-impl Limiter {
+impl<K: Hash + Eq> Limiter<K> {
     pub fn new(max: usize, window: Duration) -> Self {
         Self { max, window, hits: Mutex::new(HashMap::new()) }
     }
 
     /// Records a hit and returns whether it's within the limit.
-    pub fn check(&self, ip: IpAddr) -> bool {
-        self.check_at(ip, Instant::now())
+    pub fn check(&self, key: K) -> bool {
+        self.check_at(key, Instant::now())
     }
 
-    fn check_at(&self, ip: IpAddr, now: Instant) -> bool {
+    fn check_at(&self, key: K, now: Instant) -> bool {
         let mut hits = self.hits.lock().unwrap_or_else(|e| e.into_inner());
         // Drop idle entries so the map doesn't grow without bound.
         if hits.len() > 10_000 {
             hits.retain(|_, v| v.last().is_some_and(|t| now.duration_since(*t) < self.window));
         }
-        let entry = hits.entry(ip).or_default();
+        let entry = hits.entry(key).or_default();
         entry.retain(|t| now.duration_since(*t) < self.window);
         if entry.len() >= self.max {
             return false;
@@ -39,6 +39,8 @@ impl Limiter {
 
 #[cfg(test)]
 mod tests {
+    use std::net::IpAddr;
+
     use super::*;
 
     #[test]
