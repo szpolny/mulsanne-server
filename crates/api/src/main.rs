@@ -34,7 +34,11 @@ async fn main() -> Result<()> {
 async fn serve(db: PgPool) -> Result<()> {
     let bind: SocketAddr = std::env::var("BIND_ADDR").unwrap_or_else(|_| "0.0.0.0:8080".into()).parse()?;
     let trust_forwarded = std::env::var("TRUST_FORWARDED").is_ok_and(|v| v == "1" || v == "true");
-    let app = mulsanne_server::app(mulsanne_server::AppState::new(db, trust_forwarded));
+    let traces = mulsanne_server::traces::store_from_env()?;
+    if traces.is_none() {
+        tracing::warn!("S3_BUCKET is not set; lap traces are disabled");
+    }
+    let app = mulsanne_server::app(mulsanne_server::AppState::new(db, trust_forwarded).with_traces(traces));
     let listener = tokio::net::TcpListener::bind(bind).await?;
     tracing::info!("listening on {bind}");
     axum::serve(listener, app.into_make_service_with_connect_info::<SocketAddr>())
@@ -50,16 +54,19 @@ async fn tracks_command(db: &PgPool, args: &[&str]) -> Result<()> {
         ["list"] => {
             for t in tracks::list(db).await? {
                 let length = |v: Option<f64>| v.map_or("-".into(), |v| format!("{v:.1} m"));
+                let official = tracks::official_length(&t.track);
                 println!(
-                    "{}\n  verified: {}  median: {}  drivers: {}  held for length: {}",
+                    "{}\n  official: {}  verified: {}  median: {}  drivers: {}  held for length: {}",
                     t.track,
+                    length(official),
                     length(t.verified),
                     length(t.median),
                     t.drivers,
                     t.held_for_length
                 );
                 for (length, drivers) in t.lengths {
-                    println!("    {length:.1} m  ({drivers} drivers)");
+                    let off = official.map_or(String::new(), |o| format!("  {:+.2}% vs official", (length - o) / o * 100.0));
+                    println!("    {length:.1} m  ({drivers} drivers){off}");
                 }
             }
         }

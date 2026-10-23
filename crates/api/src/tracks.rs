@@ -3,9 +3,11 @@
 //!
 //! The expected length is the admin-verified one when set
 //! (`mulsanne-server tracks set`), otherwise the median of other drivers'
-//! uploads once [`CONSENSUS_DRIVERS`] of them agree. No single uploader
-//! decides it, and an admin can always correct it; setting a verified length
-//! re-checks every lap on that track.
+//! uploads once [`CONSENSUS_DRIVERS`] of them agree. Main layouts of known
+//! circuits must also be within [`OFFICIAL_TOLERANCE`] of the official
+//! length, so even a consensus can't move them far. No single uploader
+//! decides a length, and an admin can always correct it; setting a verified
+//! length re-checks every lap on that track.
 
 use sqlx::PgPool;
 use uuid::Uuid;
@@ -15,6 +17,73 @@ use uuid::Uuid;
 pub const LENGTH_TOLERANCE: f64 = 0.005;
 /// Other drivers needed before their median length is enforced.
 pub const CONSENSUS_DRIVERS: i64 = 3;
+
+/// LMU reports its own lap distance, which may differ from the official
+/// length by a little; anything further off is a different layout or bogus.
+pub const OFFICIAL_TOLERANCE: f64 = 0.03;
+
+struct Circuit {
+    /// Words or phrases that identify the circuit in a track name.
+    names: &'static [&'static str],
+    /// Layout variants with their own length; skipped since no official
+    /// length is published for them.
+    variants: &'static [&'static str],
+    /// Official length of the main layout (m).
+    length: f64,
+}
+
+/// Official lengths of LMU circuits' main layouts, from the 2026 FIA WEC
+/// calendar (Porsche Motorsport) and Coach Dave Academy's LMU track guide.
+/// Paul Ricard is left out: its layouts differ and sources disagree.
+const OFFICIAL: &[Circuit] = &[
+    Circuit { names: &["sarthe", "le mans", "lemans"], variants: &["mulsanne", "no chicane", "no chicanes"], length: 13_626.0 },
+    Circuit { names: &["spa", "francorchamps"], variants: &["endurance"], length: 7_004.0 },
+    Circuit { names: &["monza"], variants: &["curva grande"], length: 5_793.0 },
+    Circuit { names: &["fuji"], variants: &["classic", "no chicane"], length: 4_563.0 },
+    Circuit { names: &["bahrain", "sakhir"], variants: &["outer", "endurance", "paddock"], length: 5_412.0 },
+    Circuit { names: &["portimao", "algarve"], variants: &[], length: 4_653.0 },
+    Circuit { names: &["sebring"], variants: &["school"], length: 6_019.0 },
+    Circuit { names: &["imola", "enzo e dino ferrari"], variants: &[], length: 4_909.0 },
+    Circuit { names: &["interlagos", "carlos pace", "sao paulo"], variants: &[], length: 4_309.0 },
+    Circuit { names: &["lusail", "losail", "qatar"], variants: &["short"], length: 5_418.0 },
+    Circuit { names: &["americas", "cota"], variants: &["national"], length: 5_513.0 },
+    Circuit { names: &["silverstone"], variants: &["national", "international"], length: 5_891.0 },
+    Circuit { names: &["barcelona", "catalunya"], variants: &[], length: 4_657.0 },
+];
+
+/// Lowercase ASCII words separated by single spaces, padded with spaces so
+/// phrases can be matched as whole words.
+fn normalize(name: &str) -> String {
+    let folded: String = name
+        .to_lowercase()
+        .chars()
+        .map(|c| match c {
+            'á' | 'à' | 'â' | 'ã' | 'ä' => 'a',
+            'é' | 'è' | 'ê' | 'ë' => 'e',
+            'í' | 'ì' | 'î' | 'ï' => 'i',
+            'ó' | 'ò' | 'ô' | 'õ' | 'ö' => 'o',
+            'ú' | 'ù' | 'û' | 'ü' => 'u',
+            'ç' => 'c',
+            c if c.is_ascii_alphanumeric() => c,
+            _ => ' ',
+        })
+        .collect();
+    format!(" {} ", folded.split_whitespace().collect::<Vec<_>>().join(" "))
+}
+
+/// Official length of the main layout `track` names, if known.
+pub fn official_length(track: &str) -> Option<f64> {
+    let name = normalize(track);
+    let has = |phrase: &&str| name.contains(&format!(" {phrase} "));
+    let circuit = OFFICIAL.iter().find(|c| c.names.iter().any(has))?;
+    (!circuit.variants.iter().any(has)).then_some(circuit.length)
+}
+
+/// Whether `length` is plausible for `track`: within [`OFFICIAL_TOLERANCE`]
+/// of the official length, or the track has none.
+pub fn plausible(track: &str, length: f64) -> bool {
+    official_length(track).is_none_or(|official| (length - official).abs() <= official * OFFICIAL_TOLERANCE)
+}
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Expected {
@@ -156,6 +225,31 @@ pub async fn list(db: &PgPool) -> sqlx::Result<Vec<TrackLengths>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn official_lengths() {
+        assert_eq!(official_length("Circuit de la Sarthe"), Some(13_626.0));
+        assert_eq!(official_length("Circuit de Spa-Francorchamps"), Some(7_004.0));
+        assert_eq!(official_length("Autódromo Internacional do Algarve"), Some(4_653.0));
+        assert_eq!(official_length("Autódromo José Carlos Pace"), Some(4_309.0));
+        assert_eq!(official_length("Bahrain International Circuit"), Some(5_412.0));
+        // Variants have their own lengths.
+        assert_eq!(official_length("Bahrain International Outer Circuit"), None);
+        assert_eq!(official_length("Silverstone National"), None);
+        assert_eq!(official_length("Circuit de la Sarthe Mulsanne No Chicanes"), None);
+        assert_eq!(official_length("Lusail International Circuit Short"), None);
+        assert_eq!(official_length("Circuit Paul Ricard"), None);
+        // Whole words only: "spa" inside another word doesn't count.
+        assert_eq!(official_length("Espana Raceway"), None);
+    }
+
+    #[test]
+    fn plausibility() {
+        assert!(plausible("Spa-Francorchamps", 7_004.0));
+        assert!(plausible("Spa-Francorchamps", 7_150.0));
+        assert!(!plausible("Spa-Francorchamps", 6_500.0));
+        assert!(plausible("Unknown Raceway", 1_234.0));
+    }
 
     #[test]
     fn length_tolerance() {

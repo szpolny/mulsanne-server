@@ -11,7 +11,7 @@ use mulsanne_api::signing::{self, HEADER_KEY, HEADER_SIGNATURE, HEADER_TIMESTAMP
 use uuid::Uuid;
 
 use crate::error::AppError;
-use crate::{AppState, BODY_LIMIT};
+use crate::{traces, AppState, BODY_LIMIT};
 
 /// Public key of a request that passed [`verify_signature`].
 #[derive(Debug, Clone, Copy)]
@@ -21,7 +21,8 @@ pub struct SignedKey(pub [u8; 32]);
 /// passes the request on with a [`SignedKey`] extension.
 pub async fn verify_signature(req: Request, next: Next) -> Response {
     let (parts, body) = req.into_parts();
-    let Ok(body) = to_bytes(body, BODY_LIMIT).await else {
+    let limit = if parts.uri.path().ends_with("/trace") { traces::MAX_COMPRESSED } else { BODY_LIMIT };
+    let Ok(body) = to_bytes(body, limit).await else {
         return AppError::new(StatusCode::PAYLOAD_TOO_LARGE, "too_large", "Request body is too large").into_response();
     };
     let header = |name| parts.headers.get(name).and_then(|v| v.to_str().ok()).unwrap_or("");

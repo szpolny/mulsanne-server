@@ -2,6 +2,7 @@ pub mod auth;
 pub mod error;
 pub mod laps;
 pub mod ratelimit;
+pub mod traces;
 pub mod tracks;
 pub mod users;
 
@@ -10,13 +11,13 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use axum::extract::DefaultBodyLimit;
-use axum::routing::{delete, get, post};
+use axum::routing::{delete, get, post, put};
 use axum::{middleware, Router};
 use sqlx::PgPool;
 use uuid::Uuid;
 
-/// Largest request body accepted by any route. Raised per route later for
-/// lap traces.
+/// Largest request body accepted by any route except trace uploads
+/// ([`traces::MAX_COMPRESSED`]).
 pub const BODY_LIMIT: usize = 64 * 1024;
 
 #[derive(Clone)]
@@ -26,6 +27,8 @@ pub struct AppState {
     pub trust_forwarded: bool,
     pub registrations: Arc<ratelimit::Limiter<IpAddr>>,
     pub lap_uploads: Arc<ratelimit::Limiter<Uuid>>,
+    /// Object storage for lap traces; `None` disables them.
+    pub traces: Option<traces::Store>,
 }
 
 impl AppState {
@@ -41,7 +44,13 @@ impl AppState {
             registrations: Arc::new(ratelimit::Limiter::new(5, Duration::from_secs(3600))),
             // New laps per user; re-uploading a stored lap isn't counted.
             lap_uploads: Arc::new(ratelimit::Limiter::new(laps_per_hour, Duration::from_secs(3600))),
+            traces: None,
         }
+    }
+
+    pub fn with_traces(mut self, store: Option<traces::Store>) -> Self {
+        self.traces = store;
+        self
     }
 }
 
@@ -57,10 +66,18 @@ pub fn app(state: AppState) -> Router {
         .route("/v1/laps/{id}", delete(laps::delete))
         .layer(middleware::from_fn(auth::verify_signature));
 
+    // Downloading a trace is public; uploading one is signed and may be larger.
+    let trace = get(traces::get).merge(
+        put(traces::put)
+            .route_layer(middleware::from_fn(auth::verify_signature))
+            .route_layer(DefaultBodyLimit::max(traces::MAX_COMPRESSED)),
+    );
+
     Router::new()
         .route("/healthz", get(|| async { "ok" }))
         .route("/v1/leaderboards", get(laps::leaderboard))
         .route("/v1/leaderboards/boards", get(laps::boards))
+        .route("/v1/laps/{id}/trace", trace)
         .merge(signed)
         .layer(DefaultBodyLimit::max(BODY_LIMIT))
         .layer(tower_http::trace::TraceLayer::new_for_http())

@@ -123,6 +123,8 @@ pub async fn upload(
         Expected::Verified(length) if !tracks::matches(lap.track_length, length) => {
             return Err(invalid("Track length doesn't match this track"));
         }
+        Expected::Verified(_) => None,
+        _ if !tracks::plausible(&lap.track, lap.track_length) => Some("track_length"),
         Expected::Consensus(length) if !tracks::matches(lap.track_length, length) => Some("track_length"),
         _ => None,
     };
@@ -186,14 +188,15 @@ pub async fn upload(
 }
 
 pub async fn delete(State(state): State<AppState>, user: AuthUser, Path(id): Path<Uuid>) -> AppResult<StatusCode> {
-    let deleted = sqlx::query("DELETE FROM laps WHERE id = $1 AND user_id = $2")
+    let has_trace: Option<bool> = sqlx::query_scalar("DELETE FROM laps WHERE id = $1 AND user_id = $2 RETURNING has_trace")
         .bind(id)
         .bind(user.id)
-        .execute(&state.db)
-        .await?
-        .rows_affected();
-    if deleted == 0 {
-        return Err(AppError::new(StatusCode::NOT_FOUND, "not_found", "Lap not found"));
+        .fetch_optional(&state.db)
+        .await?;
+    match (has_trace, &state.traces) {
+        (None, _) => return Err(AppError::new(StatusCode::NOT_FOUND, "not_found", "Lap not found")),
+        (Some(true), Some(store)) => crate::traces::delete_objects(store, &[id]).await,
+        _ => {}
     }
     Ok(StatusCode::NO_CONTENT)
 }
@@ -207,6 +210,7 @@ struct EntryRow {
     vehicle_name: String,
     session_type: String,
     game_version: Option<i32>,
+    has_trace: bool,
     lap_time: f64,
     s1: f64,
     s2: f64,
@@ -231,7 +235,7 @@ pub async fn leaderboard(State(state): State<AppState>, Query(q): Query<Leaderbo
              SELECT b.*, RANK() OVER (ORDER BY b.lap_time) AS rank, COUNT(*) OVER () AS total FROM best b
          )
          SELECT r.rank, r.id, CASE WHEN r.anonymous THEN NULL ELSE u.display_name END AS driver,
-                r.car, r.vehicle_name, r.session_type, r.game_version, r.lap_time, r.s1, r.s2, r.s3,
+                r.car, r.vehicle_name, r.session_type, r.game_version, r.has_trace, r.lap_time, r.s1, r.s2, r.s3,
                 EXTRACT(EPOCH FROM r.recorded_at)::BIGINT AS recorded_at, r.total
          FROM ranked r JOIN users u ON u.id = r.user_id
          ORDER BY r.rank, r.recorded_at
@@ -258,6 +262,7 @@ pub async fn leaderboard(State(state): State<AppState>, Query(q): Query<Leaderbo
             vehicle_name: r.vehicle_name,
             session_type: r.session_type,
             game_version: r.game_version,
+            has_trace: r.has_trace,
             lap_time: r.lap_time,
             s1: r.s1,
             s2: r.s2,

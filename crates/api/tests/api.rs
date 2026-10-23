@@ -176,8 +176,11 @@ async fn register(app: &Router, seed: u8) -> SigningKey {
     key
 }
 
+/// A lap on a track with no official length, so only the consensus and
+/// verified lengths apply.
 fn with_length(time: f64, recorded_at: i64, length: f64) -> Value {
     let mut lap = lap_json(time, recorded_at, false);
+    lap["track"] = json!("Test Raceway");
     lap["track_length"] = json!(length);
     lap
 }
@@ -206,12 +209,31 @@ async fn track_lengths(db: PgPool) {
     assert_eq!(body["status"], "held");
 
     // An admin-verified length re-checks existing laps and rejects new mismatches.
-    let (held, ranked) = mulsanne_server::tracks::set_length(&db, "Spa", 6500.0).await.unwrap();
+    let (held, ranked) = mulsanne_server::tracks::set_length(&db, "Test Raceway", 6500.0).await.unwrap();
     assert_eq!((held, ranked), (3, 1));
-    let (held, ranked) = mulsanne_server::tracks::set_length(&db, "Spa", 7004.0).await.unwrap();
+    let (held, ranked) = mulsanne_server::tracks::set_length(&db, "Test Raceway", 7004.0).await.unwrap();
     assert_eq!((held, ranked), (2, 3));
     let (status, _) = send(&app, signed(&late, "POST", "/v1/laps", Some(with_length(149.0, t + 1, 6500.0)), now())).await;
     assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+}
+
+#[sqlx::test(migrations = "../../migrations")]
+#[ignore = "needs DATABASE_URL"]
+async fn official_track_lengths(db: PgPool) {
+    let app = app(AppState::new(db, false));
+    let key = register(&app, 30).await;
+    let t = now() - 600;
+
+    // "Spa" is the main layout of a known circuit (7004 m): 7% short is held
+    // even with no other drivers, a couple of percent off is fine.
+    let mut short = lap_json(150.0, t, false);
+    short["track_length"] = json!(6500.0);
+    let (_, body) = send(&app, signed(&key, "POST", "/v1/laps", Some(short), now())).await;
+    assert_eq!(body["status"], "held");
+    let mut close = lap_json(150.0, t + 1, false);
+    close["track_length"] = json!(7100.0);
+    let (_, body) = send(&app, signed(&key, "POST", "/v1/laps", Some(close), now())).await;
+    assert_eq!(body["status"], "ranked");
 }
 
 #[sqlx::test(migrations = "../../migrations")]
@@ -233,4 +255,79 @@ async fn lap_upload_rate_limit(db: PgPool) {
     let other = register(&app, 21).await;
     let (status, _) = send(&app, signed(&other, "POST", "/v1/laps", Some(lap_json(140.0, t, false)), now())).await;
     assert_eq!(status, StatusCode::CREATED);
+}
+
+/// A plausible trace for `lap_json(time, …)`: 7004 m, top speed 75 m/s.
+fn trace_gz(time: f64) -> Vec<u8> {
+    use std::io::Write;
+    let n = 1001;
+    let t: Vec<f64> = (0..n).map(|i| time * i as f64 / (n - 1) as f64).collect();
+    let d: Vec<f64> = (0..n).map(|i| 7000.0 * i as f64 / (n - 1) as f64).collect();
+    let speed: Vec<f64> = (0..n).map(|i| 30.0 + 45.0 * i as f64 / (n - 1) as f64).collect();
+    let json = json!({ "t": t, "d": d, "speed": speed, "throttle": vec![1.0; n] }).to_string();
+    let mut enc = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
+    enc.write_all(json.as_bytes()).unwrap();
+    enc.finish().unwrap()
+}
+
+fn signed_bytes(key: &SigningKey, method: &str, path: &str, body: Vec<u8>) -> Request<Body> {
+    let (k, t, s) = signing::sign(key, method, path, now(), &body);
+    Request::builder()
+        .method(method)
+        .uri(path)
+        .header("content-type", "application/gzip")
+        .header(HEADER_KEY, k)
+        .header(HEADER_TIMESTAMP, t)
+        .header(HEADER_SIGNATURE, s)
+        .body(Body::from(body))
+        .unwrap()
+}
+
+#[sqlx::test(migrations = "../../migrations")]
+#[ignore = "needs DATABASE_URL"]
+async fn traces_keep_only_the_best_lap(db: PgPool) {
+    let store = std::sync::Arc::new(object_store::memory::InMemory::new());
+    let app = app(AppState::new(db, false).with_traces(Some(store.clone())));
+    let key = register(&app, 40).await;
+    let t = now() - 600;
+    let id = |v: &Value| v["id"].as_str().unwrap().to_owned();
+
+    let (_, slow) = send(&app, signed(&key, "POST", "/v1/laps", Some(lap_json(141.0, t, false)), now())).await;
+    let (_, fast) = send(&app, signed(&key, "POST", "/v1/laps", Some(lap_json(140.0, t + 1, false)), now())).await;
+    let path = |v: &Value| format!("/v1/laps/{}/trace", id(v));
+
+    // Not the driver's best: no trace kept.
+    let (status, _) = send(&app, signed_bytes(&key, "PUT", &path(&slow), trace_gz(141.0))).await;
+    assert_eq!(status, StatusCode::CONFLICT);
+    // A trace that doesn't match the lap.
+    let (status, _) = send(&app, signed_bytes(&key, "PUT", &path(&fast), trace_gz(120.0))).await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+    let (status, _) = send(&app, signed_bytes(&key, "PUT", &path(&fast), trace_gz(140.0))).await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+
+    // Public download, and the leaderboard says it's there.
+    let res = app.clone().oneshot(Request::get(path(&fast)).body(Body::empty()).unwrap()).await.unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    assert_eq!(to_bytes(res.into_body(), usize::MAX).await.unwrap().to_vec(), trace_gz(140.0));
+    let (_, board) = send(&app, Request::get("/v1/leaderboards?track=Spa&car_class=GT3").body(Body::empty()).unwrap()).await;
+    assert_eq!(board["entries"][0]["has_trace"], true);
+
+    // A new best replaces the old trace.
+    let (_, best) = send(&app, signed(&key, "POST", "/v1/laps", Some(lap_json(139.0, t + 2, false)), now())).await;
+    let (status, _) = send(&app, signed_bytes(&key, "PUT", &path(&best), trace_gz(139.0))).await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+    let res = app.clone().oneshot(Request::get(path(&fast)).body(Body::empty()).unwrap()).await.unwrap();
+    assert_eq!(res.status(), StatusCode::NOT_FOUND);
+    assert_eq!(stored_traces(&store).await, 1);
+
+    // Deleting the user deletes the stored trace.
+    let (status, _) = send(&app, signed(&key, "DELETE", "/v1/me", None, now())).await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+    assert_eq!(stored_traces(&store).await, 0);
+}
+
+async fn stored_traces(store: &object_store::memory::InMemory) -> usize {
+    use object_store::ObjectStore;
+    let prefix = object_store::path::Path::from("traces");
+    store.list_with_delimiter(Some(&prefix)).await.unwrap().objects.len()
 }

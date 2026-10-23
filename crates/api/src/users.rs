@@ -86,6 +86,13 @@ pub async fn update_me(
 /// Deletes the user. Everything they upload later references `users(id)`
 /// with `ON DELETE CASCADE`, so this removes all of their data.
 pub async fn delete_me(State(state): State<AppState>, user: AuthUser) -> AppResult<StatusCode> {
+    let traced: Vec<Uuid> = sqlx::query_scalar("SELECT id FROM laps WHERE user_id = $1 AND has_trace")
+        .bind(user.id)
+        .fetch_all(&state.db)
+        .await?;
     sqlx::query("DELETE FROM users WHERE id = $1").bind(user.id).execute(&state.db).await?;
+    if let Some(store) = &state.traces {
+        crate::traces::delete_objects(store, &traced).await;
+    }
     Ok(StatusCode::NO_CONTENT)
 }

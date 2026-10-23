@@ -119,6 +119,8 @@ pub struct LeaderboardEntry {
     pub vehicle_name: String,
     pub session_type: String,
     pub game_version: Option<i32>,
+    /// Its telemetry can be downloaded from `GET /v1/laps/{lap_id}/trace`.
+    pub has_trace: bool,
     pub lap_time: f64,
     pub s1: f64,
     pub s2: f64,
