@@ -12,8 +12,9 @@ primary_region = "fra"
 [env]
   S3_BUCKET = "mulsanne-traces"
   S3_REGION = "auto"
-  # Fly's proxy appends the client IP to X-Forwarded-For; check with GET /v1/ip.
-  TRUSTED_PROXY_HOPS = "1"
+  # Fly ends X-Forwarded-For with "<client ip>, <this app's Fly ip>", so the client
+  # is the second entry from the right. Check with GET /v1/ip.
+  TRUSTED_PROXY_HOPS = "2"
   RUST_LOG = "mulsanne_server=info,tower_http=info"
 
 [http_service]
