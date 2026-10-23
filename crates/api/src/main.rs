@@ -32,13 +32,19 @@ async fn main() -> Result<()> {
 }
 
 async fn serve(db: PgPool) -> Result<()> {
-    let bind: SocketAddr = std::env::var("BIND_ADDR").unwrap_or_else(|_| "0.0.0.0:8080".into()).parse()?;
-    let trust_forwarded = std::env::var("TRUST_FORWARDED").is_ok_and(|v| v == "1" || v == "true");
+    // Hosts like Cloud Run say which port to use in PORT.
+    let bind: SocketAddr = match (std::env::var("BIND_ADDR"), std::env::var("PORT")) {
+        (Ok(addr), _) => addr.parse()?,
+        (_, Ok(port)) => SocketAddr::from(([0, 0, 0, 0], port.parse::<u16>()?)),
+        _ => SocketAddr::from(([0, 0, 0, 0], 8080)),
+    };
+    let proxy_hops: usize = std::env::var("TRUSTED_PROXY_HOPS").map_or(Ok(0), |v| v.parse())?;
     let traces = mulsanne_server::traces::store_from_env()?;
     if traces.is_none() {
         tracing::warn!("S3_BUCKET is not set; lap traces are disabled");
     }
-    let app = mulsanne_server::app(mulsanne_server::AppState::new(db, trust_forwarded).with_traces(traces));
+    let state = mulsanne_server::AppState::new(db).with_traces(traces).with_proxy_hops(proxy_hops);
+    let app = mulsanne_server::app(state);
     let listener = tokio::net::TcpListener::bind(bind).await?;
     tracing::info!("listening on {bind}");
     axum::serve(listener, app.into_make_service_with_connect_info::<SocketAddr>())

@@ -23,7 +23,7 @@ fn now() -> i64 {
 /// App whose pool never connects; for requests rejected before any query.
 fn offline_app() -> Router {
     let db = PgPoolOptions::new().connect_lazy("postgres://localhost/unused").unwrap();
-    app(AppState::new(db, false))
+    app(AppState::new(db))
 }
 
 fn signed(key: &SigningKey, method: &str, path: &str, body: Option<Value>, timestamp: i64) -> Request<Body> {
@@ -84,7 +84,7 @@ async fn rejects_oversized_bodies() {
 #[sqlx::test(migrations = "../../migrations")]
 #[ignore = "needs DATABASE_URL"]
 async fn user_lifecycle(db: PgPool) {
-    let app = app(AppState::new(db, false));
+    let app = app(AppState::new(db));
     let key = SigningKey::from_bytes(&[2; 32]);
 
     // Unknown keys can't use /v1/me.
@@ -126,7 +126,7 @@ fn lap_json(time: f64, recorded_at: i64, anonymous: bool) -> Value {
 #[sqlx::test(migrations = "../../migrations")]
 #[ignore = "needs DATABASE_URL"]
 async fn lap_upload_and_leaderboard(db: PgPool) {
-    let app = app(AppState::new(db, false));
+    let app = app(AppState::new(db));
     let alice = SigningKey::from_bytes(&[3; 32]);
     let bob = SigningKey::from_bytes(&[4; 32]);
     for (key, name) in [(&alice, "Alice"), (&bob, "Bob")] {
@@ -188,7 +188,7 @@ fn with_length(time: f64, recorded_at: i64, length: f64) -> Value {
 #[sqlx::test(migrations = "../../migrations")]
 #[ignore = "needs DATABASE_URL"]
 async fn track_lengths(db: PgPool) {
-    let app = app(AppState::new(db.clone(), false));
+    let app = app(AppState::new(db.clone()));
     let t = now() - 600;
 
     // A first upload with a wrong length decides nothing on its own.
@@ -220,7 +220,7 @@ async fn track_lengths(db: PgPool) {
 #[sqlx::test(migrations = "../../migrations")]
 #[ignore = "needs DATABASE_URL"]
 async fn official_track_lengths(db: PgPool) {
-    let app = app(AppState::new(db, false));
+    let app = app(AppState::new(db));
     let key = register(&app, 30).await;
     let t = now() - 600;
 
@@ -239,7 +239,7 @@ async fn official_track_lengths(db: PgPool) {
 #[sqlx::test(migrations = "../../migrations")]
 #[ignore = "needs DATABASE_URL"]
 async fn lap_upload_rate_limit(db: PgPool) {
-    let app = app(AppState::with_lap_limit(db, false, 2));
+    let app = app(AppState::with_lap_limit(db, 2));
     let key = register(&app, 20).await;
     let t = now() - 600;
     for i in 0..2 {
@@ -287,7 +287,7 @@ fn signed_bytes(key: &SigningKey, method: &str, path: &str, body: Vec<u8>) -> Re
 #[ignore = "needs DATABASE_URL"]
 async fn traces_keep_only_the_best_lap(db: PgPool) {
     let store = std::sync::Arc::new(object_store::memory::InMemory::new());
-    let app = app(AppState::new(db, false).with_traces(Some(store.clone())));
+    let app = app(AppState::new(db).with_traces(Some(store.clone())));
     let key = register(&app, 40).await;
     let t = now() - 600;
     let id = |v: &Value| v["id"].as_str().unwrap().to_owned();

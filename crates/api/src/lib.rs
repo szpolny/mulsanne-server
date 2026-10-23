@@ -23,8 +23,9 @@ pub const BODY_LIMIT: usize = 64 * 1024;
 #[derive(Clone)]
 pub struct AppState {
     pub db: PgPool,
-    /// Read the client IP from `X-Forwarded-For` (only behind a trusted proxy).
-    pub trust_forwarded: bool,
+    /// Trusted proxies in front of the server that append to
+    /// `X-Forwarded-For`; 0 uses the socket address (see [`auth::ClientIp`]).
+    pub proxy_hops: usize,
     pub registrations: Arc<ratelimit::Limiter<IpAddr>>,
     pub lap_uploads: Arc<ratelimit::Limiter<Uuid>>,
     /// Object storage for lap traces; `None` disables them.
@@ -32,14 +33,14 @@ pub struct AppState {
 }
 
 impl AppState {
-    pub fn new(db: PgPool, trust_forwarded: bool) -> Self {
-        Self::with_lap_limit(db, trust_forwarded, LAP_UPLOADS_PER_HOUR)
+    pub fn new(db: PgPool) -> Self {
+        Self::with_lap_limit(db, LAP_UPLOADS_PER_HOUR)
     }
 
-    pub fn with_lap_limit(db: PgPool, trust_forwarded: bool, laps_per_hour: usize) -> Self {
+    pub fn with_lap_limit(db: PgPool, laps_per_hour: usize) -> Self {
         Self {
             db,
-            trust_forwarded,
+            proxy_hops: 0,
             // New identities per IP; re-registering a known key isn't counted.
             registrations: Arc::new(ratelimit::Limiter::new(5, Duration::from_secs(3600))),
             // New laps per user; re-uploading a stored lap isn't counted.
@@ -50,6 +51,11 @@ impl AppState {
 
     pub fn with_traces(mut self, store: Option<traces::Store>) -> Self {
         self.traces = store;
+        self
+    }
+
+    pub fn with_proxy_hops(mut self, hops: usize) -> Self {
+        self.proxy_hops = hops;
         self
     }
 }
@@ -75,6 +81,7 @@ pub fn app(state: AppState) -> Router {
 
     Router::new()
         .route("/healthz", get(|| async { "ok" }))
+        .route("/v1/ip", get(auth::show_ip))
         .route("/v1/leaderboards", get(laps::leaderboard))
         .route("/v1/leaderboards/boards", get(laps::boards))
         .route("/v1/laps/{id}/trace", trace)

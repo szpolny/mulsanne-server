@@ -81,20 +81,50 @@ impl FromRequestParts<AppState> for AuthUser {
     }
 }
 
-/// Client IP: the socket address, or the first `X-Forwarded-For` hop when
-/// the server runs behind a trusted proxy.
+/// Client IP. Directly exposed, it's the socket address. Behind `hops`
+/// trusted proxies that each append to `X-Forwarded-For`, it's the entry
+/// `hops` from the right: anything further left was sent by the client and
+/// can be forged.
 #[derive(Debug, Clone, Copy)]
 pub struct ClientIp(pub Option<IpAddr>);
+
+pub fn forwarded_ip(header: Option<&str>, hops: usize) -> Option<IpAddr> {
+    let entries: Vec<&str> = header?.split(',').map(str::trim).collect();
+    entries.len().checked_sub(hops).and_then(|i| entries.get(i)).and_then(|ip| ip.parse().ok())
+}
 
 impl FromRequestParts<AppState> for ClientIp {
     type Rejection = std::convert::Infallible;
 
     async fn from_request_parts(parts: &mut Parts, state: &AppState) -> Result<Self, Self::Rejection> {
-        let forwarded = state
-            .trust_forwarded
-            .then(|| parts.headers.get("x-forwarded-for")?.to_str().ok()?.split(',').next()?.trim().parse().ok())
-            .flatten();
-        let socket = parts.extensions.get::<ConnectInfo<SocketAddr>>().map(|c| c.0.ip());
-        Ok(ClientIp(forwarded.or(socket)))
+        if state.proxy_hops > 0 {
+            let header = parts.headers.get("x-forwarded-for").and_then(|v| v.to_str().ok());
+            return Ok(ClientIp(forwarded_ip(header, state.proxy_hops)));
+        }
+        Ok(ClientIp(parts.extensions.get::<ConnectInfo<SocketAddr>>().map(|c| c.0.ip())))
+    }
+}
+
+/// `GET /v1/ip`: the client IP as the server sees it, for checking
+/// `TRUSTED_PROXY_HOPS` on a deployment.
+pub async fn show_ip(ClientIp(ip): ClientIp) -> String {
+    ip.map_or_else(|| "unknown".into(), |ip| ip.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn forwarded_ip_counts_trusted_hops_from_the_right() {
+        let header = Some("6.6.6.6, 1.2.3.4, 35.191.0.1");
+        // One proxy (appends the client's IP): the rightmost entry.
+        assert_eq!(forwarded_ip(header, 1), "35.191.0.1".parse().ok());
+        // Two (client IP, then a load balancer's): second from the right;
+        // the forged leftmost entry is never used.
+        assert_eq!(forwarded_ip(header, 2), "1.2.3.4".parse().ok());
+        assert_eq!(forwarded_ip(header, 4), None);
+        assert_eq!(forwarded_ip(None, 1), None);
+        assert_eq!(forwarded_ip(Some("garbage"), 1), None);
     }
 }
