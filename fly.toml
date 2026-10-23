@@ -1,0 +1,36 @@
+# Production: release builds use https://api.mulsanne.xyz (a Fly certificate on
+# this app).
+# Deploy with `fly deploy`. Secrets (DATABASE_URL, S3_ENDPOINT,
+# S3_ACCESS_KEY_ID, S3_SECRET_ACCESS_KEY) are set with `fly secrets set`.
+app = "mulsanne-api"
+# Frankfurt, next to the Neon database (eu-central-1).
+primary_region = "fra"
+
+[build]
+  dockerfile = "Dockerfile"
+
+[env]
+  S3_BUCKET = "mulsanne-traces"
+  S3_REGION = "auto"
+  # Fly's proxy appends the client IP to X-Forwarded-For; check with GET /v1/ip.
+  TRUSTED_PROXY_HOPS = "1"
+  RUST_LOG = "mulsanne_server=info,tower_http=info"
+
+[http_service]
+  internal_port = 8080
+  force_https = true
+  # Always one machine running, so players never wait for a start.
+  auto_stop_machines = "off"
+  auto_start_machines = true
+  min_machines_running = 1
+
+  [[http_service.checks]]
+    grace_period = "20s"
+    interval = "30s"
+    method = "GET"
+    path = "/healthz"
+    timeout = "5s"
+
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "256mb"

@@ -29,3 +29,13 @@ DATABASE_URL=postgres://mulsanne:mulsanne@localhost:5432/mulsanne_test cargo tes
 ## Request signing
 
 Every `/v1` request is signed with the install's Ed25519 key; see `crates/types/src/signing.rs`. The app (public repo) mirrors this in `src-tauri/src/online.rs`, and both test the same vector.
+
+## Deploy
+
+The server runs on Fly.io in two apps: `fly.test.toml` (testing, used by dev builds via `MULSANNE_API_URL`) and `fly.toml` (production, `api.mulsanne.xyz`). Secrets (`DATABASE_URL`, `S3_ENDPOINT`, `S3_ACCESS_KEY_ID`, `S3_SECRET_ACCESS_KEY`) are set with `fly secrets set`.
+
+```bash
+fly deploy -c fly.test.toml
+```
+
+Deploy to testing first, check `/healthz` and `/v1/ip`, then run `fly deploy` for production. Admin commands run on the machine: `fly ssh console -a <app> -C "mulsanne-server tracks list"`.
