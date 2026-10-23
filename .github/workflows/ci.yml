@@ -1,0 +1,77 @@
+name: CI
+
+# Every push and pull request runs clippy and all tests, including the
+# database tests, against a throwaway Postgres. Pushes to master then deploy
+# testing. Production normally deploys with each app release (from the app
+# repo's release workflow); running this by hand with the box ticked is for
+# server-only hotfixes.
+on:
+  push:
+    branches: [master]
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      deploy_production:
+        description: Deploy this commit to production after the tests pass
+        type: boolean
+        default: false
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_PASSWORD: postgres
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      # sqlx::test creates and drops a database per test, so this user needs
+      # to be allowed to create databases (the default superuser is).
+      DATABASE_URL: postgres://postgres:postgres@localhost:5432/postgres
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      - uses: Swatinem/rust-cache@v2
+
+      - run: cargo clippy --all-targets -- -D warnings
+
+      - run: cargo test -- --include-ignored
+
+  deploy-testing:
+    needs: test
+    if: github.event_name == 'push' && github.ref == 'refs/heads/master'
+    runs-on: ubuntu-latest
+    # One deploy at a time; a newer push waits for the running one.
+    concurrency: deploy-testing
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: superfly/flyctl-actions/setup-flyctl@master
+
+      - run: flyctl deploy -c fly.test.toml --remote-only
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN_TESTING }}
+
+  deploy-production:
+    needs: test
+    if: github.event_name == 'workflow_dispatch' && inputs.deploy_production && github.ref == 'refs/heads/master'
+    runs-on: ubuntu-latest
+    concurrency: deploy-production
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: superfly/flyctl-actions/setup-flyctl@master
+
+      - run: flyctl deploy -c fly.toml --remote-only
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN_PRODUCTION }}
