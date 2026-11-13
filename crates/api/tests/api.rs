@@ -132,7 +132,7 @@ async fn user_lifecycle(db: PgPool) {
 
 fn lap_json(time: f64, recorded_at: i64, anonymous: bool) -> Value {
     json!({
-        "track": "Spa", "track_length": 7004.0, "car": "Ferrari 296 LMGT3", "vehicle_name": "Ferrari #55",
+        "track": "Spa", "track_length": 7004.0, "car": "Ferrari 296 LMGT3", "vehicle_name": "Ferrari #55", "veh_file": "397_25_963",
         "car_class": "GT3", "session_type": "Practice", "lap_time": time,
         "s1": time * 0.3, "s2": time * 0.4, "s3": time * 0.3,
         "max_speed": 75.0, "recorded_at": recorded_at, "app_version": "0.5.0", "anonymous": anonymous,
@@ -159,7 +159,10 @@ async fn lap_upload_and_leaderboard(db: PgPool) {
     assert_eq!(again["id"], body["id"]);
     // Alice's slower lap doesn't replace her best.
     send(&app, signed(&alice, "POST", "/v1/laps", Some(lap_json(141.0, t + 200, false)), now())).await;
-    let (_, bob_lap) = send(&app, signed(&bob, "POST", "/v1/laps", Some(lap_json(139.0, t, true)), now())).await;
+    // Sent by an app that predates liveries.
+    let mut old_app = lap_json(139.0, t, true);
+    old_app.as_object_mut().unwrap().remove("veh_file");
+    let (_, bob_lap) = send(&app, signed(&bob, "POST", "/v1/laps", Some(old_app), now())).await;
 
     // More than 3% faster than the record: held.
     let (_, held) = send(&app, signed(&bob, "POST", "/v1/laps", Some(lap_json(120.0, t + 300, false)), now())).await;
@@ -173,6 +176,8 @@ async fn lap_upload_and_leaderboard(db: PgPool) {
     assert_eq!(board["entries"][0]["lap_time"], 139.0);
     assert_eq!(board["entries"][1]["driver"], "Alice");
     assert_eq!(board["entries"][1]["lap_time"], 140.0);
+    assert_eq!(board["entries"][0]["veh_file"], "");
+    assert_eq!(board["entries"][1]["veh_file"], "397_25_963");
 
     // Only the owner can delete a lap.
     let path = format!("/v1/laps/{}", bob_lap["id"].as_str().unwrap());
