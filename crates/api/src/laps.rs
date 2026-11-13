@@ -43,6 +43,9 @@ pub fn validate(lap: &LapUpload, now: i64) -> AppResult<()> {
     text("car", &lap.car)?;
     text("vehicle name", &lap.vehicle_name)?;
     text("car class", &lap.car_class)?;
+    if lap.veh_file.len() > 64 || !lap.veh_file.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-') {
+        return Err(invalid("Invalid livery"));
+    }
     if lap.app_version.is_empty() || lap.app_version.len() > 32 {
         return Err(invalid("Invalid app version"));
     }
@@ -144,8 +147,8 @@ pub async fn upload(
     let inserted: Option<(Uuid, String)> = sqlx::query_as(
         "INSERT INTO laps (user_id, track, track_length, car, vehicle_name, car_class, session_type, game_version,
                            lap_time, s1, s2, s3, fuel_used, ve_used, max_speed, recorded_at, app_version, anonymous,
-                           status, held_reason)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, to_timestamp($16), $17, $18, $19, $20)
+                           status, held_reason, veh_file)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, to_timestamp($16), $17, $18, $19, $20, $21)
          ON CONFLICT (user_id, track, car, recorded_at) DO NOTHING
          RETURNING id, status",
     )
@@ -169,6 +172,7 @@ pub async fn upload(
     .bind(lap.anonymous)
     .bind(if held_reason.is_some() { "held" } else { "ranked" })
     .bind(held_reason)
+    .bind(&lap.veh_file)
     .fetch_optional(&state.db)
     .await?;
     match inserted {
@@ -208,6 +212,7 @@ struct EntryRow {
     driver: Option<String>,
     car: String,
     vehicle_name: String,
+    veh_file: String,
     session_type: String,
     game_version: Option<i32>,
     has_trace: bool,
@@ -235,7 +240,7 @@ pub async fn leaderboard(State(state): State<AppState>, Query(q): Query<Leaderbo
              SELECT b.*, RANK() OVER (ORDER BY b.lap_time) AS rank, COUNT(*) OVER () AS total FROM best b
          )
          SELECT r.rank, r.id, CASE WHEN r.anonymous THEN NULL ELSE u.display_name END AS driver,
-                r.car, r.vehicle_name, r.session_type, r.game_version, r.has_trace, r.lap_time, r.s1, r.s2, r.s3,
+                r.car, r.vehicle_name, r.veh_file, r.session_type, r.game_version, r.has_trace, r.lap_time, r.s1, r.s2, r.s3,
                 EXTRACT(EPOCH FROM r.recorded_at)::BIGINT AS recorded_at, r.total
          FROM ranked r JOIN users u ON u.id = r.user_id
          ORDER BY r.rank, r.recorded_at
@@ -260,6 +265,7 @@ pub async fn leaderboard(State(state): State<AppState>, Query(q): Query<Leaderbo
             driver: r.driver,
             car: r.car,
             vehicle_name: r.vehicle_name,
+            veh_file: r.veh_file,
             session_type: r.session_type,
             game_version: r.game_version,
             has_trace: r.has_trace,
@@ -315,6 +321,7 @@ mod tests {
             track_length: 7004.0,
             car: "Ferrari 296 LMGT3".into(),
             vehicle_name: "Ferrari 296 LMGT3 #55".into(),
+            veh_file: "397_25_963".into(),
             car_class: "GT3".into(),
             session_type: "Practice".into(),
             game_version: Some(1123),
@@ -356,6 +363,8 @@ mod tests {
         assert!(rejects(|l| l.session_type = "Hotlap".into()));
         assert!(rejects(|l| l.track = " ".into()));
         assert!(rejects(|l| l.car = "x".repeat(101)));
+        assert!(rejects(|l| l.veh_file = "../UI".into()));
+        assert!(rejects(|l| l.veh_file = "x".repeat(65)));
         assert!(rejects(|l| l.lap_time = f64::NAN));
         assert!(rejects(|l| l.fuel_used = Some(-1.0)));
         assert!(rejects(|l| l.ve_used = Some(f64::INFINITY)));

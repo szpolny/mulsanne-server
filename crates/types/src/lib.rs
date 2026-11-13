@@ -52,6 +52,10 @@ pub struct LapUpload {
     pub track_length: f64,
     pub car: String,
     pub vehicle_name: String,
+    /// The livery's `.VEH` file name without extension; keys the game's car
+    /// renders. Empty when the app didn't send it.
+    #[serde(default)]
+    pub veh_file: String,
     pub car_class: String,
     pub session_type: String,
     /// LMU's build number, when the app knows it.
@@ -117,6 +121,9 @@ pub struct LeaderboardEntry {
     pub driver: Option<String>,
     pub car: String,
     pub vehicle_name: String,
+    /// The livery's `.VEH` file name, or empty when unknown.
+    #[serde(default)]
+    pub veh_file: String,
     pub session_type: String,
     pub game_version: Option<i32>,
     /// Its telemetry can be downloaded from `GET /v1/laps/{lap_id}/trace`.
