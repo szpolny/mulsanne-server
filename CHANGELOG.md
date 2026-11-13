@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.1.0](https://github.com/szpolny/mulsanne-server/compare/v1.0.0...v1.1.0) (2026-11-13)
+
+
+### Features
+
+* store and return each lap's livery ([#2](https://github.com/szpolny/mulsanne-server/issues/2)) ([cee935c](https://github.com/szpolny/mulsanne-server/commit/cee935cb29dc33ce304f1cdaa394e4217452adf9))
+
 ## 1.0.0 (2026-10-23)
 
 
