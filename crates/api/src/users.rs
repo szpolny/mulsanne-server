@@ -91,6 +91,7 @@ pub async fn delete_me(State(state): State<AppState>, user: AuthUser) -> AppResu
         .fetch_all(&state.db)
         .await?;
     sqlx::query("DELETE FROM users WHERE id = $1").bind(user.id).execute(&state.db).await?;
+    state.live.end_user(user.id);
     if let Some(store) = &state.traces {
         crate::traces::delete_objects(store, &traced).await;
     }

@@ -352,3 +352,76 @@ async fn stored_traces(store: &object_store::memory::InMemory) -> usize {
     let prefix = object_store::path::Path::from("traces");
     store.list_with_delimiter(Some(&prefix)).await.unwrap().objects.len()
 }
+
+#[tokio::test]
+async fn unknown_live_shares_are_not_found_and_allow_cross_origin_reads() {
+    let app = offline_app();
+    let req = Request::get("/v1/live/nope").header("origin", "https://mulsanne.xyz").body(Body::empty()).unwrap();
+    let res = app.clone().oneshot(req).await.unwrap();
+    assert_eq!(res.status(), StatusCode::NOT_FOUND);
+    assert_eq!(res.headers()["access-control-allow-origin"], "*");
+
+    let req = Request::get("/v1/live/nope/events").body(Body::empty()).unwrap();
+    assert_eq!(app.oneshot(req).await.unwrap().status(), StatusCode::NOT_FOUND);
+}
+
+#[sqlx::test(migrations = "../../migrations")]
+#[ignore = "needs DATABASE_URL"]
+async fn live_share_lifecycle(db: PgPool) {
+    let state = AppState::new(db);
+    let app = app(state.clone());
+    let key = register(&app, 40).await;
+    let stranger = register(&app, 41).await;
+
+    let (status, body) = send(&app, signed(&key, "POST", "/v1/live", None, now())).await;
+    assert_eq!(status, StatusCode::CREATED);
+    let id = body["id"].as_str().unwrap().to_owned();
+    let frame_path = format!("/v1/live/{id}/frame");
+    let share_path = format!("/v1/live/{id}");
+
+    // Nothing sent yet.
+    let (status, body) = send(&app, Request::get(&share_path).body(Body::empty()).unwrap()).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body, json!({ "frame": null, "map": null, "viewers": 0 }));
+
+    let (status, _) = send(&app, signed(&key, "PUT", &frame_path, Some(json!([1])), now())).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    // Someone else's key can't push or end it.
+    let (status, _) = send(&app, signed(&stranger, "PUT", &frame_path, Some(json!({ "x": 1 })), now())).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    let (status, _) = send(&app, signed(&stranger, "DELETE", &share_path, None, now())).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+
+    let (status, body) = send(&app, signed(&key, "PUT", &frame_path, Some(json!({ "lap": 3 })), now())).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body, json!({ "viewers": 0, "has_map": false }));
+    let (status, _) = send(&app, signed(&key, "PUT", &format!("/v1/live/{id}/map"), Some(json!({ "points": [] })), now())).await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+    let (_, body) = send(&app, Request::get(&share_path).body(Body::empty()).unwrap()).await;
+    assert_eq!(body["frame"], json!({ "lap": 3 }));
+    assert_eq!(body["map"], json!({ "points": [] }));
+
+    // A restart forgets the frames, but the owner's next push brings the
+    // share back under the same id.
+    state.live.end(&id);
+    let (status, _) = send(&app, Request::get(&share_path).body(Body::empty()).unwrap()).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    let (status, _) = send(&app, signed(&stranger, "PUT", &frame_path, Some(json!({ "x": 1 })), now())).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    let (status, _) = send(&app, signed(&key, "PUT", &frame_path, Some(json!({ "lap": 4 })), now())).await;
+    assert_eq!(status, StatusCode::OK);
+    let (_, body) = send(&app, Request::get(&share_path).body(Body::empty()).unwrap()).await;
+    assert_eq!(body["frame"], json!({ "lap": 4 }));
+
+    // Starting another share ends the first, for good.
+    let (_, body) = send(&app, signed(&key, "POST", "/v1/live", None, now())).await;
+    let second = body["id"].as_str().unwrap().to_owned();
+    assert_ne!(second, id);
+    let (status, _) = send(&app, signed(&key, "PUT", &frame_path, Some(json!({ "lap": 5 })), now())).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+
+    let (status, _) = send(&app, signed(&key, "DELETE", &format!("/v1/live/{second}"), None, now())).await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+    let (status, _) = send(&app, signed(&key, "PUT", &format!("/v1/live/{second}/frame"), Some(json!({ "lap": 6 })), now())).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+}
