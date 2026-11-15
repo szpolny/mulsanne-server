@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.2.0](https://github.com/szpolny/mulsanne-server/compare/v1.1.0...v1.2.0) (2026-11-15)
+
+
+### Features
+
+* relay live timing shares to browsers ([#4](https://github.com/szpolny/mulsanne-server/issues/4)) ([ef4482c](https://github.com/szpolny/mulsanne-server/commit/ef4482c8cbfd9d9fd00408c1c797362246a17724))
+
 ## [1.1.0](https://github.com/szpolny/mulsanne-server/compare/v1.0.0...v1.1.0) (2026-11-13)
 
 
