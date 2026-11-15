@@ -30,6 +30,12 @@ DATABASE_URL=postgres://mulsanne:mulsanne@localhost:5432/mulsanne_test cargo tes
 
 Every `/v1` request is signed with the install's Ed25519 key; see `crates/types/src/signing.rs`. The app (public repo) mirrors this in `src-tauri/src/online.rs`, and both test the same vector.
 
+## Live timing
+
+`/v1/live` relays live timing from the app to the viewer page at `mulsanne.xyz/live#<id>` (see `crates/api/src/live.rs`). The app opens a share (`POST /v1/live`) and pushes a JSON frame about once a second (`PUT /v1/live/{id}/frame`) plus the track outline when it changes (`PUT /v1/live/{id}/map`). Browsers read `GET /v1/live/{id}` and then follow `GET /v1/live/{id}/events` (server-sent events: `map`, `frame`, `end`). Those two routes allow any origin.
+
+Frames are kept **in memory only**, so live timing needs a single machine: with more, a viewer and the driver's app can land on different ones. The `live_shares` table only records who owns each share, so after a restart or deploy the owner's next push brings the share back under the same link.
+
 ## Deploy
 
 The server runs on Fly.io in two apps: `fly.test.toml` (testing, used by dev builds via `MULSANNE_API_URL`) and `fly.toml` (production, `api.mulsanne.xyz`). Secrets (`DATABASE_URL`, `S3_ENDPOINT`, `S3_ACCESS_KEY_ID`, `S3_SECRET_ACCESS_KEY`) are set with `fly secrets set`.

@@ -154,6 +154,25 @@ pub struct BoardSummary {
     pub game_versions: Vec<i32>,
 }
 
+/// Response to `POST /v1/live`: a new live timing share. Viewers open
+/// `https://mulsanne.xyz/live#<id>`; the id is the only secret.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LiveShareCreated {
+    pub id: String,
+    /// Unix seconds; the share ends then even if the app keeps sending.
+    pub expires_at: i64,
+}
+
+/// Response to `PUT /v1/live/{id}/frame`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LivePushed {
+    /// Browsers watching the share right now.
+    pub viewers: usize,
+    /// Whether the server has a track map for this share. It doesn't after a
+    /// restart, so the app sends it again.
+    pub has_map: bool,
+}
+
 pub const DISPLAY_NAME_MIN: usize = 2;
 pub const DISPLAY_NAME_MAX: usize = 32;
 

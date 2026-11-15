@@ -1,6 +1,7 @@
 pub mod auth;
 pub mod error;
 pub mod laps;
+pub mod live;
 pub mod ratelimit;
 pub mod traces;
 pub mod tracks;
@@ -30,6 +31,10 @@ pub struct AppState {
     pub lap_uploads: Arc<ratelimit::Limiter<Uuid>>,
     /// Object storage for lap traces; `None` disables them.
     pub traces: Option<traces::Store>,
+    /// Open live timing shares (in memory; see [`live`]).
+    pub live: Arc<live::Hub>,
+    /// New live shares per user.
+    pub live_creates: Arc<ratelimit::Limiter<Uuid>>,
 }
 
 impl AppState {
@@ -46,6 +51,8 @@ impl AppState {
             // New laps per user; re-uploading a stored lap isn't counted.
             lap_uploads: Arc::new(ratelimit::Limiter::new(laps_per_hour, Duration::from_secs(3600))),
             traces: None,
+            live: Arc::new(live::Hub::default()),
+            live_creates: Arc::new(ratelimit::Limiter::new(live::SHARES_PER_HOUR, Duration::from_secs(3600))),
         }
     }
 
@@ -77,6 +84,9 @@ pub fn app(state: AppState) -> Router {
         .route("/v1/me", get(users::me).patch(users::update_me).delete(users::delete_me))
         .route("/v1/laps", post(laps::upload))
         .route("/v1/laps/{id}", delete(laps::delete))
+        .route("/v1/live", post(live::create))
+        .route("/v1/live/{id}/frame", put(live::push_frame))
+        .route("/v1/live/{id}/map", put(live::push_map))
         // route_layer: only matched routes need a signature, so unknown paths get a 404.
         .route_layer(middleware::from_fn(auth::verify_signature));
 
@@ -87,8 +97,19 @@ pub fn app(state: AppState) -> Router {
             .route_layer(DefaultBodyLimit::max(traces::MAX_COMPRESSED)),
     );
 
+    // Watching a live share is public and happens from the website, so it
+    // allows any origin; ending one is signed. No cookies are involved.
+    let cors = tower_http::cors::CorsLayer::new()
+        .allow_origin(tower_http::cors::Any)
+        .allow_methods([axum::http::Method::GET]);
+    let live_share = get(live::latest)
+        .route_layer(cors.clone())
+        .merge(delete(live::end).route_layer(middleware::from_fn(auth::verify_signature)));
+
     Router::new()
         .route("/healthz", get(|| async { "ok" }))
+        .route("/v1/live/{id}", live_share)
+        .route("/v1/live/{id}/events", get(live::events).route_layer(cors))
         .route("/v1/ip", get(auth::show_ip))
         .route("/v1/version", get(|| async { version() }))
         .route("/v1/leaderboards", get(laps::leaderboard))
