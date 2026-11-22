@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.3.0](https://github.com/szpolny/mulsanne-server/compare/v1.2.0...v1.3.0) (2026-11-22)
+
+
+### Features
+
+* add admin dashboard API with Steam sign-in ([#6](https://github.com/szpolny/mulsanne-server/issues/6)) ([00cb182](https://github.com/szpolny/mulsanne-server/commit/00cb1827f40618f445991297d4d0e00af91f1ccf))
+
 ## [1.2.0](https://github.com/szpolny/mulsanne-server/compare/v1.1.0...v1.2.0) (2026-11-15)
 
 
