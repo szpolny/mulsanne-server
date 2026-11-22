@@ -24,6 +24,7 @@ use axum::Json;
 use futures_util::stream::{self, Stream};
 use mulsanne_api::{LivePushed, LiveShareCreated};
 use serde_json::Value;
+use sqlx::PgPool;
 use tokio::sync::watch;
 use uuid::Uuid;
 
@@ -204,17 +205,50 @@ impl Hub {
 
     /// Ends shares past [`MAX_AGE`], and shares whose app stopped pushing for
     /// [`IDLE`] (counted from when they were opened if it never pushed).
-    pub fn sweep(&self, now: Instant) {
-        self.lock().retain(|_, s| now < s.expires && now.duration_since(s.activity().last_seen) < IDLE);
+    /// Returns each ended share with how long ago its app last pushed.
+    pub fn sweep(&self, now: Instant) -> Vec<(String, Duration)> {
+        let mut ended = Vec::new();
+        self.lock().retain(|id, s| {
+            let idle = now.duration_since(s.activity().last_seen);
+            let keep = now < s.expires && idle < IDLE;
+            if !keep {
+                ended.push((id.clone(), idle));
+            }
+            keep
+        });
+        ended
     }
 
-    /// Runs [`Hub::sweep`] every half minute.
-    pub async fn sweep_forever(self: Arc<Self>) {
+    /// Runs [`Hub::sweep`] every half minute and records in `live_shares`
+    /// when each share ended, for the admin dashboard's history.
+    pub async fn sweep_forever(self: Arc<Self>, db: PgPool) {
+        let started = Instant::now();
         let mut tick = tokio::time::interval(Duration::from_secs(30));
         loop {
             tick.tick().await;
-            self.sweep(Instant::now());
+            let ended = self.sweep(Instant::now());
+            if let Err(e) = record_ended(&db, &ended, self.ids(), started.elapsed() > IDLE).await {
+                tracing::warn!("recording ended live shares: {e}");
+            }
         }
+    }
+
+    fn ids(&self) -> Vec<String> {
+        self.lock().keys().cloned().collect()
+    }
+
+    /// Every open share, for the admin dashboard.
+    pub fn snapshot(&self, now: Instant) -> Vec<ShareInfo> {
+        self.lock()
+            .iter()
+            .map(|(id, s)| ShareInfo {
+                id: id.clone(),
+                user: s.user,
+                viewers: s.viewers(),
+                idle: now.duration_since(s.activity().last_seen),
+                frame: s.frame.borrow().clone(),
+            })
+            .collect()
     }
 
     /// The latest frame and map, and the viewer count.
@@ -248,6 +282,43 @@ impl Hub {
         }
         Some(Ok(Viewer { frame, map, pending, done: false, _guards: (share_guard, total_guard) }))
     }
+}
+
+/// An open share as [`Hub::snapshot`] sees it.
+pub struct ShareInfo {
+    pub id: String,
+    pub user: Uuid,
+    pub viewers: usize,
+    /// Since the app last pushed (or the share opened).
+    pub idle: Duration,
+    pub frame: Payload,
+}
+
+/// Marks swept shares ended as of their last push. Once the server has been
+/// up for [`IDLE`], an open row with no share in memory is one a restart
+/// forgot and its app never brought back, so it is ended too. Rows younger
+/// than a minute are left alone: [`create`] writes the row before it opens
+/// the share.
+async fn record_ended(db: &PgPool, ended: &[(String, Duration)], open: Vec<String>, settled: bool) -> sqlx::Result<()> {
+    for (id, idle) in ended {
+        sqlx::query(
+            "UPDATE live_shares SET ended_at = now() - make_interval(secs => $2) WHERE id = $1 AND ended_at IS NULL",
+        )
+        .bind(id)
+        .bind(idle.as_secs_f64())
+        .execute(db)
+        .await?;
+    }
+    if settled {
+        sqlx::query(
+            "UPDATE live_shares SET ended_at = LEAST(now(), expires_at)
+             WHERE ended_at IS NULL AND created_at < now() - interval '1 minute' AND NOT (id = ANY($1))",
+        )
+        .bind(open)
+        .execute(db)
+        .await?;
+    }
+    Ok(())
 }
 
 /// Counts a viewer while it's alive.
@@ -552,6 +623,38 @@ mod tests {
         assert!(hub.watch("a").unwrap().is_err());
         drop(viewers);
         assert!(hub.watch("a").unwrap().is_ok());
+    }
+
+    #[sqlx::test(migrations = "../../migrations")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn records_when_shares_ended(db: PgPool) {
+        let user: Uuid = sqlx::query_scalar("INSERT INTO users (public_key) VALUES ($1) RETURNING id")
+            .bind(&KEY[..])
+            .fetch_one(&db)
+            .await
+            .unwrap();
+        for id in ["swept", "forgotten", "open", "new"] {
+            let age = if id == "new" { 0.0 } else { 600.0 };
+            sqlx::query("INSERT INTO live_shares (id, user_id, created_at, expires_at) VALUES ($1, $2, now() - make_interval(secs => $3), now() + interval '1 day')")
+                .bind(id)
+                .bind(user)
+                .bind(age)
+                .execute(&db)
+                .await
+                .unwrap();
+        }
+        let ended = vec![("swept".to_owned(), Duration::from_secs(200))];
+        record_ended(&db, &ended, vec!["open".into()], true).await.unwrap();
+        let rows: Vec<(String, Option<f64>)> =
+            sqlx::query_as("SELECT id, EXTRACT(EPOCH FROM now() - ended_at)::FLOAT8 FROM live_shares ORDER BY id")
+                .fetch_all(&db)
+                .await
+                .unwrap();
+        let ago = |id: &str| rows.iter().find(|r| r.0 == id).unwrap().1;
+        assert!(ago("swept").is_some_and(|s| (199.0..=201.0).contains(&s)));
+        assert!(ago("forgotten").is_some_and(|s| s < 1.0));
+        assert_eq!(ago("open"), None);
+        assert_eq!(ago("new"), None, "just created; its share may not be open yet");
     }
 
     #[test]

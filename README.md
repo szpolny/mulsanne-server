@@ -36,9 +36,23 @@ Every `/v1` request is signed with the install's Ed25519 key; see `crates/types/
 
 Frames are kept **in memory only**, so live timing needs a single machine: with more, a viewer and the driver's app can land on different ones. The `live_shares` table only records who owns each share, so after a restart or deploy the owner's next push brings the share back under the same link.
 
+## Admin dashboard
+
+`/v1/admin` backs the dashboard at `mulsanne.xyz/admin` (see `crates/api/src/admin.rs`): the rankings with every lap (held and anonymous ones too) and deleting laps, drivers and clearing display names, and who is live sharing now plus the history of shares.
+
+The admin signs in with Steam. `GET /v1/admin/steam/login` sends the browser to Steam's OpenID page; Steam returns to `/v1/admin/steam/callback`, which checks the assertion with Steam and lets in only the account in `ADMIN_STEAM_ID`. It then redirects to `ADMIN_WEB_URL#token=<token>`, and the page sends the token as `Authorization: Bearer`. Sessions last 12 hours and are stored hashed in `admin_sessions`; changing `ADMIN_STEAM_ID` ends them. Without `ADMIN_STEAM_ID` the routes answer 404.
+
+`ADMIN_STEAM_ID` is the repository secret of the same name (your SteamID64, the 17-digit number in `steamcommunity.com/profiles/<id>`). The deploy jobs stage it on both Fly apps before deploying, so it is never in the repo:
+
+```bash
+gh secret set ADMIN_STEAM_ID
+```
+
+`API_PUBLIC_URL` and `ADMIN_WEB_URL` are set in `fly.toml` and `fly.test.toml`. Testing returns to `http://localhost:5173/admin`, for the website's dev server pointed at testing.
+
 ## Deploy
 
-The server runs on Fly.io in two apps: `fly.test.toml` (testing, used by dev builds via `MULSANNE_API_URL`) and `fly.toml` (production, `api.mulsanne.xyz`). Secrets (`DATABASE_URL`, `S3_ENDPOINT`, `S3_ACCESS_KEY_ID`, `S3_SECRET_ACCESS_KEY`) are set with `fly secrets set`.
+The server runs on Fly.io in two apps: `fly.test.toml` (testing, used by dev builds via `MULSANNE_API_URL`) and `fly.toml` (production, `api.mulsanne.xyz`). Secrets (`DATABASE_URL`, `S3_ENDPOINT`, `S3_ACCESS_KEY_ID`, `S3_SECRET_ACCESS_KEY`) are set with `fly secrets set`; `ADMIN_STEAM_ID` comes from the repository secret (see above).
 
 This repo is the only thing that deploys. GitHub Actions (`.github/workflows/ci.yml`):
 

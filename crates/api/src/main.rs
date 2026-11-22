@@ -45,8 +45,12 @@ async fn serve(db: PgPool) -> Result<()> {
     if traces.is_none() {
         tracing::warn!("S3_BUCKET is not set; lap traces are disabled");
     }
-    let state = mulsanne_server::AppState::new(db).with_traces(traces).with_proxy_hops(proxy_hops);
-    tokio::spawn(state.live.clone().sweep_forever());
+    let admin = mulsanne_server::admin::Config::from_env()?;
+    if admin.is_none() {
+        tracing::warn!("ADMIN_STEAM_ID is not set; the admin dashboard is disabled");
+    }
+    let state = mulsanne_server::AppState::new(db).with_traces(traces).with_proxy_hops(proxy_hops).with_admin(admin);
+    tokio::spawn(state.live.clone().sweep_forever(state.db.clone()));
     let app = mulsanne_server::app(state);
     let listener = tokio::net::TcpListener::bind(bind).await?;
     tracing::info!("mulsanne-server {} listening on {bind}", mulsanne_server::version());

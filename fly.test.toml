@@ -15,6 +15,11 @@ primary_region = "fra"
   # is the second entry from the right. Check with GET /v1/ip.
   TRUSTED_PROXY_HOPS = "2"
   RUST_LOG = "mulsanne_server=info,tower_http=info"
+  # Admin dashboard sign-in (crates/api/src/admin.rs). ADMIN_STEAM_ID itself is
+  # a secret, staged from the repository secret by the deploy workflow.
+  API_PUBLIC_URL = "https://mulsanne-api-test.fly.dev"
+  # The website in dev (`VITE_API_URL=https://mulsanne-api-test.fly.dev pnpm dev`).
+  ADMIN_WEB_URL = "http://localhost:5173/admin"
 
 [http_service]
   internal_port = 8080

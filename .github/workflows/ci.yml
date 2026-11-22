@@ -71,6 +71,15 @@ jobs:
 
       - uses: superfly/flyctl-actions/setup-flyctl@master
 
+      # The admin's Steam account stays out of the repo; the deploy applies it.
+      # An unchanged value must not fail the deploy.
+      - run: |
+          [ -z "$ADMIN_STEAM_ID" ] || flyctl secrets set --stage -a mulsanne-api-test ADMIN_STEAM_ID="$ADMIN_STEAM_ID" \
+            || echo "::warning::Could not stage ADMIN_STEAM_ID"
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN_TESTING }}
+          ADMIN_STEAM_ID: ${{ secrets.ADMIN_STEAM_ID }}
+
       - run: flyctl deploy -c fly.test.toml --remote-only --env "MULSANNE_VERSION=testing-${GITHUB_SHA::7}"
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN_TESTING }}
@@ -84,6 +93,15 @@ jobs:
       - uses: actions/checkout@v4
 
       - uses: superfly/flyctl-actions/setup-flyctl@master
+
+      # The admin's Steam account stays out of the repo; the deploy applies it.
+      # An unchanged value must not fail the deploy.
+      - run: |
+          [ -z "$ADMIN_STEAM_ID" ] || flyctl secrets set --stage -a mulsanne-api ADMIN_STEAM_ID="$ADMIN_STEAM_ID" \
+            || echo "::warning::Could not stage ADMIN_STEAM_ID"
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN_PRODUCTION }}
+          ADMIN_STEAM_ID: ${{ secrets.ADMIN_STEAM_ID }}
 
       - run: flyctl deploy -c fly.toml --remote-only --env "MULSANNE_VERSION=${{ needs.release-please.outputs.version }}"
         env:

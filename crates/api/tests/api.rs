@@ -433,3 +433,198 @@ async fn live_share_lifecycle(db: PgPool) {
         send(&app, signed(&key, "PUT", &format!("/v1/live/{second}/frame"), Some(json!({ "lap": 6 })), now())).await;
     assert_eq!(status, StatusCode::NOT_FOUND);
 }
+
+const ADMIN_STEAM_ID: &str = "76561197960287930";
+const OTHER_STEAM_ID: &str = "76561197960287931";
+
+/// Stands in for Steam's OpenID endpoint: an assertion is valid when its
+/// signature is "good".
+async fn fake_steam() -> String {
+    use axum::routing::post;
+    let steam = Router::new().route(
+        "/openid/login",
+        post(|axum::Form(form): axum::Form<std::collections::HashMap<String, String>>| async move {
+            let valid = form.get("openid.mode").map(String::as_str) == Some("check_authentication")
+                && form.get("openid.sig").map(String::as_str) == Some("good");
+            format!("ns:http://specs.openid.net/auth/2.0\nis_valid:{valid}\n")
+        }),
+    );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move { axum::serve(listener, steam).await.unwrap() });
+    format!("http://{addr}/openid/login")
+}
+
+fn admin_state(db: PgPool, steam: &str) -> AppState {
+    let config =
+        mulsanne_server::admin::Config::new(ADMIN_STEAM_ID, "https://api.test", "https://web.test/admin", steam)
+            .unwrap();
+    AppState::new(db).with_admin(Some(config))
+}
+
+fn location(res: &axum::response::Response) -> String {
+    res.headers()["location"].to_str().unwrap().to_owned()
+}
+
+/// Starts a sign-in and comes back from Steam as `steam_id`; returns where
+/// the browser is sent.
+async fn steam_sign_in(app: &Router, steam: &str, steam_id: &str, sig: &str) -> String {
+    let res = app.clone().oneshot(Request::get("/v1/admin/steam/login").body(Body::empty()).unwrap()).await.unwrap();
+    assert_eq!(res.status(), StatusCode::SEE_OTHER);
+    let to_steam = reqwest::Url::parse(&location(&res)).unwrap();
+    let param = |k: &str| to_steam.query_pairs().find(|(n, _)| n == k).unwrap().1.into_owned();
+    let return_to = param("openid.return_to");
+    assert!(return_to.starts_with("https://api.test/v1/admin/steam/callback?state="));
+    assert_eq!(param("openid.realm"), "https://api.test");
+
+    let claimed = format!("https://steamcommunity.com/openid/id/{steam_id}");
+    let back = reqwest::Url::parse_with_params(
+        &return_to,
+        [
+            ("openid.ns", "http://specs.openid.net/auth/2.0"),
+            ("openid.mode", "id_res"),
+            ("openid.op_endpoint", steam),
+            ("openid.claimed_id", &claimed),
+            ("openid.identity", &claimed),
+            ("openid.return_to", &return_to),
+            ("openid.response_nonce", "2026-11-22T10:00:00Zabc"),
+            ("openid.assoc_handle", "1234567890"),
+            ("openid.signed", "signed,op_endpoint,claimed_id,identity,return_to,response_nonce,assoc_handle"),
+            ("openid.sig", sig),
+        ],
+    )
+    .unwrap();
+    let path = format!("{}?{}", back.path(), back.query().unwrap());
+    let res = app.clone().oneshot(Request::get(&path).body(Body::empty()).unwrap()).await.unwrap();
+    assert_eq!(res.status(), StatusCode::SEE_OTHER);
+    let to_web = location(&res);
+    // Replaying the same callback doesn't sign in again.
+    let res = app.clone().oneshot(Request::get(&path).body(Body::empty()).unwrap()).await.unwrap();
+    assert_eq!(location(&res), "https://web.test/admin#error=expired");
+    to_web
+}
+
+fn admin_req(method: &str, path: &str, token: &str) -> Request<Body> {
+    Request::builder()
+        .method(method)
+        .uri(path)
+        .header("authorization", format!("Bearer {token}"))
+        .body(Body::empty())
+        .unwrap()
+}
+
+#[tokio::test]
+async fn admin_is_off_without_a_steam_id() {
+    let res = offline_app().oneshot(Request::get("/v1/admin/steam/login").body(Body::empty()).unwrap()).await.unwrap();
+    assert_eq!(res.status(), StatusCode::NOT_FOUND);
+}
+
+#[sqlx::test(migrations = "../../migrations")]
+#[ignore = "needs DATABASE_URL"]
+async fn admin_sign_in(db: PgPool) {
+    let steam = fake_steam().await;
+    let app = app(admin_state(db, &steam));
+
+    assert_eq!(steam_sign_in(&app, &steam, OTHER_STEAM_ID, "good").await, "https://web.test/admin#error=forbidden");
+    assert_eq!(steam_sign_in(&app, &steam, ADMIN_STEAM_ID, "forged").await, "https://web.test/admin#error=invalid");
+    let to_web = steam_sign_in(&app, &steam, ADMIN_STEAM_ID, "good").await;
+    let token = to_web.strip_prefix("https://web.test/admin#token=").expect(&to_web).to_owned();
+
+    let (status, _) = send(&app, admin_req("GET", "/v1/admin/session", "nope")).await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+    let (status, body) = send(&app, admin_req("GET", "/v1/admin/session", &token)).await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(body["expires_at"].as_i64().unwrap() > now());
+    assert!(!body.to_string().contains(ADMIN_STEAM_ID));
+
+    // Preflight from the website.
+    let req = Request::builder()
+        .method("OPTIONS")
+        .uri("/v1/admin/laps/x")
+        .header("origin", "https://mulsanne.xyz")
+        .header("access-control-request-method", "DELETE")
+        .header("access-control-request-headers", "authorization")
+        .body(Body::empty())
+        .unwrap();
+    let res = app.clone().oneshot(req).await.unwrap();
+    assert_eq!(res.headers()["access-control-allow-origin"], "*");
+
+    let (status, _) = send(&app, admin_req("DELETE", "/v1/admin/session", &token)).await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+    let (status, _) = send(&app, admin_req("GET", "/v1/admin/session", &token)).await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+}
+
+#[sqlx::test(migrations = "../../migrations")]
+#[ignore = "needs DATABASE_URL"]
+async fn admin_moderation(db: PgPool) {
+    let steam = fake_steam().await;
+    let state = admin_state(db, &steam);
+    let app = app(state.clone());
+    let to_web = steam_sign_in(&app, &steam, ADMIN_STEAM_ID, "good").await;
+    let token = to_web.rsplit('=').next().unwrap().to_owned();
+
+    let alice = SigningKey::from_bytes(&[50; 32]);
+    let bob = SigningKey::from_bytes(&[51; 32]);
+    for (key, name) in [(&alice, "Alice"), (&bob, "Rude Name")] {
+        send(&app, signed(key, "POST", "/v1/users", Some(json!({ "display_name": name })), now())).await;
+    }
+    let t = now() - 600;
+    send(&app, signed(&alice, "POST", "/v1/laps", Some(lap_json(140.0, t, false)), now())).await;
+    send(&app, signed(&alice, "POST", "/v1/laps", Some(lap_json(141.0, t + 1, false)), now())).await;
+    let (_, fake) = send(&app, signed(&bob, "POST", "/v1/laps", Some(lap_json(139.0, t, true)), now())).await;
+
+    // Signed requests from the app aren't admin sessions.
+    let (status, _) = send(&app, signed(&alice, "GET", "/v1/admin/laps", None, now())).await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+
+    let (_, boards) = send(&app, admin_req("GET", "/v1/admin/boards", &token)).await;
+    assert_eq!(
+        boards,
+        json!([{ "track": "Spa", "car_class": "GT3", "ranked": 3, "held": 0, "drivers": 2, "best_lap": 139.0 }])
+    );
+    let (_, all) = send(&app, admin_req("GET", "/v1/admin/laps?track=Spa&car_class=GT3", &token)).await;
+    assert_eq!(all["total"], 3);
+    // The admin sees who uploaded an anonymous lap.
+    assert_eq!(all["laps"][0]["driver"], "Rude Name");
+    assert_eq!(all["laps"][0]["anonymous"], true);
+    let (_, best) = send(&app, admin_req("GET", "/v1/admin/laps?track=Spa&car_class=GT3&best=true", &token)).await;
+    assert_eq!(best["total"], 2);
+
+    let path = format!("/v1/admin/laps/{}", fake["id"].as_str().unwrap());
+    let (status, _) = send(&app, admin_req("DELETE", &path, &token)).await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+    let (status, _) = send(&app, admin_req("DELETE", &path, &token)).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    let req = Request::get("/v1/leaderboards?track=Spa&car_class=GT3").body(Body::empty()).unwrap();
+    let (_, board) = send(&app, req).await;
+    assert_eq!(board["total"], 1);
+
+    let (_, users) = send(&app, admin_req("GET", "/v1/admin/users?q=rude", &token)).await;
+    assert_eq!(users["total"], 1);
+    let bob_id = users["users"][0]["id"].as_str().unwrap().to_owned();
+    let (status, _) = send(&app, admin_req("DELETE", &format!("/v1/admin/users/{bob_id}/display_name"), &token)).await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+    let (_, me) = send(&app, signed(&bob, "GET", "/v1/me", None, now())).await;
+    assert_eq!(me["display_name"], Value::Null);
+
+    // Live shares: one open, one ended.
+    let (_, first) = send(&app, signed(&alice, "POST", "/v1/live", None, now())).await;
+    send(&app, signed(&alice, "DELETE", &format!("/v1/live/{}", first["id"].as_str().unwrap()), None, now())).await;
+    let (_, open) = send(&app, signed(&bob, "POST", "/v1/live", None, now())).await;
+    let frame = json!({ "session": { "track": "Spa", "kind": "race" }, "player": { "vehicleName": "Ferrari #55" } });
+    send(&app, signed(&bob, "PUT", &format!("/v1/live/{}/frame", open["id"].as_str().unwrap()), Some(frame), now()))
+        .await;
+
+    let (status, live) = send(&app, admin_req("GET", "/v1/admin/live", &token)).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(live["current"].as_array().unwrap().len(), 1);
+    assert_eq!(live["current"][0]["id"], open["id"]);
+    assert_eq!(live["current"][0]["track"], "Spa");
+    assert_eq!(live["current"][0]["session"], "race");
+    assert_eq!(live["current"][0]["car"], "Ferrari #55");
+    assert_eq!(live["total"], 2);
+    assert_eq!(live["history"][0]["live"], true);
+    assert_eq!(live["history"][1]["live"], false);
+    assert!(live["history"][1]["ended_at"].is_i64());
+}
