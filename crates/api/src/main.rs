@@ -16,7 +16,9 @@ type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 #[tokio::main]
 async fn main() -> Result<()> {
     tracing_subscriber::fmt()
-        .with_env_filter(EnvFilter::try_from_default_env().unwrap_or_else(|_| "mulsanne_server=info,tower_http=info".into()))
+        .with_env_filter(
+            EnvFilter::try_from_default_env().unwrap_or_else(|_| "mulsanne_server=info,tower_http=info".into()),
+        )
         .init();
 
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -43,8 +45,12 @@ async fn serve(db: PgPool) -> Result<()> {
     if traces.is_none() {
         tracing::warn!("S3_BUCKET is not set; lap traces are disabled");
     }
-    let state = mulsanne_server::AppState::new(db).with_traces(traces).with_proxy_hops(proxy_hops);
-    tokio::spawn(state.live.clone().sweep_forever());
+    let admin = mulsanne_server::admin::Config::from_env()?;
+    if admin.is_none() {
+        tracing::warn!("ADMIN_STEAM_ID is not set; the admin dashboard is disabled");
+    }
+    let state = mulsanne_server::AppState::new(db).with_traces(traces).with_proxy_hops(proxy_hops).with_admin(admin);
+    tokio::spawn(state.live.clone().sweep_forever(state.db.clone()));
     let app = mulsanne_server::app(state);
     let listener = tokio::net::TcpListener::bind(bind).await?;
     tracing::info!("mulsanne-server {} listening on {bind}", mulsanne_server::version());
@@ -72,7 +78,8 @@ async fn tracks_command(db: &PgPool, args: &[&str]) -> Result<()> {
                     t.held_for_length
                 );
                 for (length, drivers) in t.lengths {
-                    let off = official.map_or(String::new(), |o| format!("  {:+.2}% vs official", (length - o) / o * 100.0));
+                    let off =
+                        official.map_or(String::new(), |o| format!("  {:+.2}% vs official", (length - o) / o * 100.0));
                     println!("    {length:.1} m  ({drivers} drivers){off}");
                 }
             }

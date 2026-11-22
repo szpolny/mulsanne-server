@@ -148,7 +148,12 @@ pub fn validate(gz: &[u8], lap: &LapFacts) -> AppResult<()> {
 }
 
 /// `PUT /v1/laps/{id}/trace`: the body is the gzipped trace.
-pub async fn put(State(state): State<AppState>, user: AuthUser, Path(id): Path<Uuid>, body: Bytes) -> AppResult<StatusCode> {
+pub async fn put(
+    State(state): State<AppState>,
+    user: AuthUser,
+    Path(id): Path<Uuid>,
+    body: Bytes,
+) -> AppResult<StatusCode> {
     let store = store(&state)?;
     let lap: Option<(String, String, f64, f64, f64, i64)> = sqlx::query_as(
         "SELECT track, car_class, lap_time, track_length, max_speed, EXTRACT(EPOCH FROM recorded_at)::BIGINT
@@ -209,10 +214,11 @@ pub async fn put(State(state): State<AppState>, user: AuthUser, Path(id): Path<U
 /// `GET /v1/laps/{id}/trace`: public for ranked laps, as the gzipped JSON.
 pub async fn get(State(state): State<AppState>, Path(id): Path<Uuid>) -> AppResult<impl IntoResponse> {
     let store = store(&state)?;
-    let available: bool = sqlx::query_scalar("SELECT EXISTS (SELECT 1 FROM laps WHERE id = $1 AND status = 'ranked' AND has_trace)")
-        .bind(id)
-        .fetch_one(&state.db)
-        .await?;
+    let available: bool =
+        sqlx::query_scalar("SELECT EXISTS (SELECT 1 FROM laps WHERE id = $1 AND status = 'ranked' AND has_trace)")
+            .bind(id)
+            .fetch_one(&state.db)
+            .await?;
     if !available {
         return Err(AppError::new(StatusCode::NOT_FOUND, "not_found", "No trace for this lap"));
     }

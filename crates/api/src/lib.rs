@@ -1,3 +1,4 @@
+pub mod admin;
 pub mod auth;
 pub mod error;
 pub mod laps;
@@ -35,6 +36,8 @@ pub struct AppState {
     pub live: Arc<live::Hub>,
     /// New live shares per user.
     pub live_creates: Arc<ratelimit::Limiter<Uuid>>,
+    /// Admin dashboard settings; `None` disables `/v1/admin` (see [`admin`]).
+    pub admin: Option<Arc<admin::Config>>,
 }
 
 impl AppState {
@@ -53,11 +56,17 @@ impl AppState {
             traces: None,
             live: Arc::new(live::Hub::default()),
             live_creates: Arc::new(ratelimit::Limiter::new(live::SHARES_PER_HOUR, Duration::from_secs(3600))),
+            admin: None,
         }
     }
 
     pub fn with_traces(mut self, store: Option<traces::Store>) -> Self {
         self.traces = store;
+        self
+    }
+
+    pub fn with_admin(mut self, admin: Option<admin::Config>) -> Self {
+        self.admin = admin.map(Arc::new);
         self
     }
 
@@ -99,12 +108,30 @@ pub fn app(state: AppState) -> Router {
 
     // Watching a live share is public and happens from the website, so it
     // allows any origin; ending one is signed. No cookies are involved.
-    let cors = tower_http::cors::CorsLayer::new()
-        .allow_origin(tower_http::cors::Any)
-        .allow_methods([axum::http::Method::GET]);
+    let cors =
+        tower_http::cors::CorsLayer::new().allow_origin(tower_http::cors::Any).allow_methods([axum::http::Method::GET]);
     let live_share = get(live::latest)
         .route_layer(cors.clone())
         .merge(delete(live::end).route_layer(middleware::from_fn(auth::verify_signature)));
+
+    // The dashboard authenticates with a bearer token, not cookies, so any
+    // origin may call it.
+    let admin = Router::new()
+        .route("/v1/admin/steam/login", get(admin::login))
+        .route("/v1/admin/steam/callback", get(admin::callback))
+        .route("/v1/admin/session", get(admin::session).delete(admin::logout))
+        .route("/v1/admin/boards", get(admin::boards))
+        .route("/v1/admin/laps", get(admin::laps))
+        .route("/v1/admin/laps/{id}", delete(admin::delete_lap))
+        .route("/v1/admin/users", get(admin::users))
+        .route("/v1/admin/users/{id}/display_name", delete(admin::clear_display_name))
+        .route("/v1/admin/live", get(admin::live))
+        .layer(
+            tower_http::cors::CorsLayer::new()
+                .allow_origin(tower_http::cors::Any)
+                .allow_methods([axum::http::Method::GET, axum::http::Method::DELETE])
+                .allow_headers([axum::http::header::AUTHORIZATION]),
+        );
 
     Router::new()
         .route("/healthz", get(|| async { "ok" }))
@@ -116,6 +143,7 @@ pub fn app(state: AppState) -> Router {
         .route("/v1/leaderboards/boards", get(laps::boards))
         .route("/v1/laps/{id}/trace", trace)
         .merge(signed)
+        .merge(admin)
         .layer(DefaultBodyLimit::max(BODY_LIMIT))
         .layer(tower_http::trace::TraceLayer::new_for_http())
         .with_state(state)

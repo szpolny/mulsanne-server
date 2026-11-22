@@ -51,11 +51,7 @@ impl<S: Send + Sync> FromRequestParts<S> for SignedKey {
     type Rejection = AppError;
 
     async fn from_request_parts(parts: &mut Parts, _: &S) -> Result<Self, AppError> {
-        parts
-            .extensions
-            .get::<SignedKey>()
-            .copied()
-            .ok_or_else(|| AppError::unauthorized("Request is not signed"))
+        parts.extensions.get::<SignedKey>().copied().ok_or_else(|| AppError::unauthorized("Request is not signed"))
     }
 }
 
@@ -70,12 +66,11 @@ impl FromRequestParts<AppState> for AuthUser {
 
     async fn from_request_parts(parts: &mut Parts, state: &AppState) -> Result<Self, AppError> {
         let SignedKey(key) = SignedKey::from_request_parts(parts, state).await?;
-        let id: Option<Uuid> = sqlx::query_scalar(
-            "UPDATE users SET last_seen_at = now() WHERE public_key = $1 RETURNING id",
-        )
-        .bind(&key[..])
-        .fetch_optional(&state.db)
-        .await?;
+        let id: Option<Uuid> =
+            sqlx::query_scalar("UPDATE users SET last_seen_at = now() WHERE public_key = $1 RETURNING id")
+                .bind(&key[..])
+                .fetch_optional(&state.db)
+                .await?;
         id.map(|id| AuthUser { id })
             .ok_or_else(|| AppError::unauthorized("This key is not registered; enable online features again"))
     }

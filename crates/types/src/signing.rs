@@ -70,17 +70,12 @@ pub fn verify(
     }
     let key = VerifyingKey::from_bytes(&key_bytes).map_err(|_| VerifyError::Malformed)?;
     let msg = message(method, path_and_query, timestamp, body);
-    key.verify(msg.as_bytes(), &Signature::from_bytes(&sig_bytes))
-        .map_err(|_| VerifyError::BadSignature)?;
+    key.verify(msg.as_bytes(), &Signature::from_bytes(&sig_bytes)).map_err(|_| VerifyError::BadSignature)?;
     Ok(key)
 }
 
 fn decode_fixed<const N: usize>(value: &str) -> Result<[u8; N], VerifyError> {
-    URL_SAFE_NO_PAD
-        .decode(value)
-        .ok()
-        .and_then(|v| v.try_into().ok())
-        .ok_or(VerifyError::Malformed)
+    URL_SAFE_NO_PAD.decode(value).ok().and_then(|v| v.try_into().ok()).ok_or(VerifyError::Malformed)
 }
 
 #[cfg(test)]

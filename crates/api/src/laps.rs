@@ -67,7 +67,9 @@ pub fn validate(lap: &LapUpload, now: i64) -> AppResult<()> {
     if !(20.0..=1_800.0).contains(&lap.lap_time) {
         return Err(invalid("Lap time is out of range"));
     }
-    if [lap.s1, lap.s2, lap.s3].iter().any(|s| *s <= 0.0) || (lap.s1 + lap.s2 + lap.s3 - lap.lap_time).abs() > SECTOR_TOLERANCE {
+    if [lap.s1, lap.s2, lap.s3].iter().any(|s| *s <= 0.0)
+        || (lap.s1 + lap.s2 + lap.s3 - lap.lap_time).abs() > SECTOR_TOLERANCE
+    {
         return Err(invalid("Sector times don't add up to the lap time"));
     }
     let average_speed = lap.track_length / lap.lap_time;
@@ -192,11 +194,12 @@ pub async fn upload(
 }
 
 pub async fn delete(State(state): State<AppState>, user: AuthUser, Path(id): Path<Uuid>) -> AppResult<StatusCode> {
-    let has_trace: Option<bool> = sqlx::query_scalar("DELETE FROM laps WHERE id = $1 AND user_id = $2 RETURNING has_trace")
-        .bind(id)
-        .bind(user.id)
-        .fetch_optional(&state.db)
-        .await?;
+    let has_trace: Option<bool> =
+        sqlx::query_scalar("DELETE FROM laps WHERE id = $1 AND user_id = $2 RETURNING has_trace")
+            .bind(id)
+            .bind(user.id)
+            .fetch_optional(&state.db)
+            .await?;
     match (has_trace, &state.traces) {
         (None, _) => return Err(AppError::new(StatusCode::NOT_FOUND, "not_found", "Lap not found")),
         (Some(true), Some(store)) => crate::traces::delete_objects(store, &[id]).await,
@@ -224,7 +227,10 @@ struct EntryRow {
     total: i64,
 }
 
-pub async fn leaderboard(State(state): State<AppState>, Query(q): Query<LeaderboardQuery>) -> AppResult<Json<Leaderboard>> {
+pub async fn leaderboard(
+    State(state): State<AppState>,
+    Query(q): Query<LeaderboardQuery>,
+) -> AppResult<Json<Leaderboard>> {
     let limit = q.limit.unwrap_or(DEFAULT_LIMIT).clamp(1, MAX_LIMIT);
     let offset = q.offset.unwrap_or(0).max(0);
     // Best ranked lap per driver; ties keep the earlier lap.
