@@ -99,9 +99,8 @@ pub fn app(state: AppState) -> Router {
 
     // Watching a live share is public and happens from the website, so it
     // allows any origin; ending one is signed. No cookies are involved.
-    let cors = tower_http::cors::CorsLayer::new()
-        .allow_origin(tower_http::cors::Any)
-        .allow_methods([axum::http::Method::GET]);
+    let cors =
+        tower_http::cors::CorsLayer::new().allow_origin(tower_http::cors::Any).allow_methods([axum::http::Method::GET]);
     let live_share = get(live::latest)
         .route_layer(cors.clone())
         .merge(delete(live::end).route_layer(middleware::from_fn(auth::verify_signature)));

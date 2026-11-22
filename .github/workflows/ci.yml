@@ -1,6 +1,6 @@
 name: CI
 
-# Every push and pull request runs clippy and all tests, including the
+# Every push and pull request checks formatting and runs clippy and all tests, including the
 # database tests, against a throwaway Postgres. On master:
 # - every push that passes deploys testing;
 # - release-please keeps a release PR open, and merging it tags a release and
@@ -34,9 +34,11 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@stable
         with:
-          components: clippy
+          components: clippy, rustfmt
 
       - uses: Swatinem/rust-cache@v2
+
+      - run: cargo fmt --check
 
       - run: cargo clippy --all-targets -- -D warnings
 

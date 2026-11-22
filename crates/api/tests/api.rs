@@ -93,7 +93,8 @@ async fn rejects_unsigned_stale_and_tampered_requests() {
 async fn rejects_oversized_bodies() {
     let key = SigningKey::from_bytes(&[1; 32]);
     let name = "x".repeat(mulsanne_server::BODY_LIMIT);
-    let (status, _) = send(&offline_app(), signed(&key, "POST", "/v1/users", Some(json!({ "display_name": name })), now())).await;
+    let (status, _) =
+        send(&offline_app(), signed(&key, "POST", "/v1/users", Some(json!({ "display_name": name })), now())).await;
     assert_eq!(status, StatusCode::PAYLOAD_TOO_LARGE);
 }
 
@@ -107,7 +108,8 @@ async fn user_lifecycle(db: PgPool) {
     let (status, _) = send(&app, signed(&key, "GET", "/v1/me", None, now())).await;
     assert_eq!(status, StatusCode::UNAUTHORIZED);
 
-    let (status, body) = send(&app, signed(&key, "POST", "/v1/users", Some(json!({ "display_name": " Szymon " })), now())).await;
+    let (status, body) =
+        send(&app, signed(&key, "POST", "/v1/users", Some(json!({ "display_name": " Szymon " })), now())).await;
     assert_eq!(status, StatusCode::CREATED);
     let me: Me = serde_json::from_value(body).unwrap();
     assert_eq!(me.display_name.as_deref(), Some("Szymon"));
@@ -120,7 +122,8 @@ async fn user_lifecycle(db: PgPool) {
     let (status, _) = send(&app, signed(&key, "PATCH", "/v1/me", Some(json!({ "display_name": "x" })), now())).await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
 
-    let (status, body) = send(&app, signed(&key, "PATCH", "/v1/me", Some(json!({ "display_name": null })), now())).await;
+    let (status, body) =
+        send(&app, signed(&key, "PATCH", "/v1/me", Some(json!({ "display_name": null })), now())).await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(serde_json::from_value::<Me>(body).unwrap().display_name, None);
 
@@ -234,7 +237,8 @@ async fn track_lengths(db: PgPool) {
     assert_eq!((held, ranked), (3, 1));
     let (held, ranked) = mulsanne_server::tracks::set_length(&db, "Test Raceway", 7004.0).await.unwrap();
     assert_eq!((held, ranked), (2, 3));
-    let (status, _) = send(&app, signed(&late, "POST", "/v1/laps", Some(with_length(149.0, t + 1, 6500.0)), now())).await;
+    let (status, _) =
+        send(&app, signed(&late, "POST", "/v1/laps", Some(with_length(149.0, t + 1, 6500.0)), now())).await;
     assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
 }
 
@@ -264,7 +268,8 @@ async fn lap_upload_rate_limit(db: PgPool) {
     let key = register(&app, 20).await;
     let t = now() - 600;
     for i in 0..2 {
-        let (status, _) = send(&app, signed(&key, "POST", "/v1/laps", Some(lap_json(140.0, t + i, false)), now())).await;
+        let (status, _) =
+            send(&app, signed(&key, "POST", "/v1/laps", Some(lap_json(140.0, t + i, false)), now())).await;
         assert_eq!(status, StatusCode::CREATED);
     }
     // Re-uploading a stored lap is free.
@@ -330,7 +335,8 @@ async fn traces_keep_only_the_best_lap(db: PgPool) {
     let res = app.clone().oneshot(Request::get(path(&fast)).body(Body::empty()).unwrap()).await.unwrap();
     assert_eq!(res.status(), StatusCode::OK);
     assert_eq!(to_bytes(res.into_body(), usize::MAX).await.unwrap().to_vec(), trace_gz(140.0));
-    let (_, board) = send(&app, Request::get("/v1/leaderboards?track=Spa&car_class=GT3").body(Body::empty()).unwrap()).await;
+    let (_, board) =
+        send(&app, Request::get("/v1/leaderboards?track=Spa&car_class=GT3").body(Body::empty()).unwrap()).await;
     assert_eq!(board["entries"][0]["has_trace"], true);
 
     // A new best replaces the old trace.
@@ -395,7 +401,8 @@ async fn live_share_lifecycle(db: PgPool) {
     let (status, body) = send(&app, signed(&key, "PUT", &frame_path, Some(json!({ "lap": 3 })), now())).await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(body, json!({ "viewers": 0, "has_map": false }));
-    let (status, _) = send(&app, signed(&key, "PUT", &format!("/v1/live/{id}/map"), Some(json!({ "points": [] })), now())).await;
+    let (status, _) =
+        send(&app, signed(&key, "PUT", &format!("/v1/live/{id}/map"), Some(json!({ "points": [] })), now())).await;
     assert_eq!(status, StatusCode::NO_CONTENT);
     let (_, body) = send(&app, Request::get(&share_path).body(Body::empty()).unwrap()).await;
     assert_eq!(body["frame"], json!({ "lap": 3 }));
@@ -422,6 +429,7 @@ async fn live_share_lifecycle(db: PgPool) {
 
     let (status, _) = send(&app, signed(&key, "DELETE", &format!("/v1/live/{second}"), None, now())).await;
     assert_eq!(status, StatusCode::NO_CONTENT);
-    let (status, _) = send(&app, signed(&key, "PUT", &format!("/v1/live/{second}/frame"), Some(json!({ "lap": 6 })), now())).await;
+    let (status, _) =
+        send(&app, signed(&key, "PUT", &format!("/v1/live/{second}/frame"), Some(json!({ "lap": 6 })), now())).await;
     assert_eq!(status, StatusCode::NOT_FOUND);
 }

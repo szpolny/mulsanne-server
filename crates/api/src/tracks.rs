@@ -36,7 +36,11 @@ struct Circuit {
 /// calendar (Porsche Motorsport) and Coach Dave Academy's LMU track guide.
 /// Paul Ricard is left out: its layouts differ and sources disagree.
 const OFFICIAL: &[Circuit] = &[
-    Circuit { names: &["sarthe", "le mans", "lemans"], variants: &["mulsanne", "no chicane", "no chicanes"], length: 13_626.0 },
+    Circuit {
+        names: &["sarthe", "le mans", "lemans"],
+        variants: &["mulsanne", "no chicane", "no chicanes"],
+        length: 13_626.0,
+    },
     Circuit { names: &["spa", "francorchamps"], variants: &["endurance"], length: 7_004.0 },
     Circuit { names: &["monza"], variants: &["curva grande"], length: 5_793.0 },
     Circuit { names: &["fuji"], variants: &["classic", "no chicane"], length: 4_563.0 },
@@ -102,10 +106,8 @@ pub fn matches(length: f64, expected: f64) -> bool {
 /// Expected length of `track` for an upload by `user`, whose own laps don't
 /// count towards the consensus.
 pub async fn expected_length(db: &PgPool, track: &str, user: Uuid) -> sqlx::Result<Expected> {
-    let verified: Option<f64> = sqlx::query_scalar("SELECT length FROM tracks WHERE name = $1")
-        .bind(track)
-        .fetch_optional(db)
-        .await?;
+    let verified: Option<f64> =
+        sqlx::query_scalar("SELECT length FROM tracks WHERE name = $1").bind(track).fetch_optional(db).await?;
     if let Some(length) = verified {
         return Ok(Expected::Verified(length));
     }

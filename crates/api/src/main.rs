@@ -16,7 +16,9 @@ type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 #[tokio::main]
 async fn main() -> Result<()> {
     tracing_subscriber::fmt()
-        .with_env_filter(EnvFilter::try_from_default_env().unwrap_or_else(|_| "mulsanne_server=info,tower_http=info".into()))
+        .with_env_filter(
+            EnvFilter::try_from_default_env().unwrap_or_else(|_| "mulsanne_server=info,tower_http=info".into()),
+        )
         .init();
 
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -72,7 +74,8 @@ async fn tracks_command(db: &PgPool, args: &[&str]) -> Result<()> {
                     t.held_for_length
                 );
                 for (length, drivers) in t.lengths {
-                    let off = official.map_or(String::new(), |o| format!("  {:+.2}% vs official", (length - o) / o * 100.0));
+                    let off =
+                        official.map_or(String::new(), |o| format!("  {:+.2}% vs official", (length - o) / o * 100.0));
                     println!("    {length:.1} m  ({drivers} drivers){off}");
                 }
             }

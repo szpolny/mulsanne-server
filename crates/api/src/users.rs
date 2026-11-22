@@ -75,11 +75,12 @@ pub async fn update_me(
     Json(req): Json<UpdateMeRequest>,
 ) -> AppResult<Json<Me>> {
     let name = display_name(req.display_name.as_deref())?;
-    let row: MeRow = sqlx::query_as(&format!("UPDATE users SET display_name = $2 WHERE id = $1 RETURNING {ME_COLUMNS}"))
-        .bind(user.id)
-        .bind(name)
-        .fetch_one(&state.db)
-        .await?;
+    let row: MeRow =
+        sqlx::query_as(&format!("UPDATE users SET display_name = $2 WHERE id = $1 RETURNING {ME_COLUMNS}"))
+            .bind(user.id)
+            .bind(name)
+            .fetch_one(&state.db)
+            .await?;
     Ok(Json(to_me(row)))
 }
 

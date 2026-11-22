@@ -175,7 +175,13 @@ impl Hub {
     }
 
     /// Publishes a frame; returns the number of viewers and whether a map was sent.
-    pub fn push_frame(&self, id: &str, key: &[u8; 32], frame: Arc<str>, now: Instant) -> Result<(usize, bool), PushError> {
+    pub fn push_frame(
+        &self,
+        id: &str,
+        key: &[u8; 32],
+        frame: Arc<str>,
+        now: Instant,
+    ) -> Result<(usize, bool), PushError> {
         let share = self.owned(id, key)?;
         {
             let a = &mut *share.activity();
@@ -199,9 +205,7 @@ impl Hub {
     /// Ends shares past [`MAX_AGE`], and shares whose app stopped pushing for
     /// [`IDLE`] (counted from when they were opened if it never pushed).
     pub fn sweep(&self, now: Instant) {
-        self.lock().retain(|_, s| {
-            now < s.expires && now.duration_since(s.activity().last_seen) < IDLE
-        });
+        self.lock().retain(|_, s| now < s.expires && now.duration_since(s.activity().last_seen) < IDLE);
     }
 
     /// Runs [`Hub::sweep`] every half minute.
@@ -225,7 +229,8 @@ impl Hub {
     /// there are too many viewers.
     fn watch(&self, id: &str) -> Option<Result<Viewer, AppError>> {
         let share = self.get(id)?;
-        let full = || AppError::new(StatusCode::SERVICE_UNAVAILABLE, "full", "Too many people are watching; try again later");
+        let full =
+            || AppError::new(StatusCode::SERVICE_UNAVAILABLE, "full", "Too many people are watching; try again later");
         let Some(share_guard) = Guard::acquire(&share.viewers, MAX_VIEWERS_PER_SHARE) else {
             return Some(Err(full()));
         };
@@ -330,9 +335,17 @@ fn unix_now() -> i64 {
 
 /// `POST /v1/live`: opens a share for the signed-in user, ending their
 /// previous one.
-pub async fn create(State(state): State<AppState>, SignedKey(key): SignedKey, user: AuthUser) -> AppResult<(StatusCode, Json<LiveShareCreated>)> {
+pub async fn create(
+    State(state): State<AppState>,
+    SignedKey(key): SignedKey,
+    user: AuthUser,
+) -> AppResult<(StatusCode, Json<LiveShareCreated>)> {
     if !state.live_creates.check(user.id) {
-        return Err(AppError::new(StatusCode::TOO_MANY_REQUESTS, "rate_limited", "Too many live sessions started; try again later"));
+        return Err(AppError::new(
+            StatusCode::TOO_MANY_REQUESTS,
+            "rate_limited",
+            "Too many live sessions started; try again later",
+        ));
     }
     // 122 random bits; the id is the viewers' only credential.
     let id = Uuid::new_v4().simple().to_string();
@@ -410,7 +423,11 @@ pub async fn push_map(
 }
 
 /// `DELETE /v1/live/{id}`: stops sharing; viewers get an `end` event.
-pub async fn end(State(state): State<AppState>, SignedKey(key): SignedKey, Path(id): Path<String>) -> AppResult<StatusCode> {
+pub async fn end(
+    State(state): State<AppState>,
+    SignedKey(key): SignedKey,
+    Path(id): Path<String>,
+) -> AppResult<StatusCode> {
     let ended = sqlx::query(
         "UPDATE live_shares s SET ended_at = now() FROM users u
          WHERE s.id = $1 AND u.id = s.user_id AND u.public_key = $2 AND s.ended_at IS NULL",
